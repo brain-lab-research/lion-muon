@@ -29,6 +29,8 @@ from optim.schedulefree import AdamWScheduleFree, SGDScheduleFree
 from optim.scion import Scion, ScionLight, scion_partitions
 from optim.sign import Signum
 from optim.soap import SOAP
+from optim.shampoo import Shampoo
+from optim.shampoo_single import ShampooSingle
 from optim.sophia import SophiaG
 
 
@@ -155,6 +157,61 @@ def main(args, parser):
             normalize_grads=args.normalize_grads,
             data_format=args.soap_data_format,
             correct_bias=args.correct_bias,
+            power=args.soap_power,
+        )
+    elif args.opt == "soap_sania":
+        opt = SOAP(
+            group_specs,
+            lr=args.lr,
+            betas=(args.beta1, args.beta2),
+            shampoo_beta=args.shampoo_beta,
+            weight_decay=args.weight_decay,
+            precondition_frequency=args.precondition_frequency,
+            max_precond_dim=args.max_precond_dim,
+            merge_dims=args.merge_dims,
+            precondition_1d=args.precondition_1d,
+            normalize_grads=args.normalize_grads,
+            data_format=args.soap_data_format,
+            correct_bias=args.correct_bias,
+            power=1.0,  # sania uses power=1.0 (no sqrt)
+        )
+    elif args.opt == "shampoo":
+        opt = Shampoo(
+            group_specs,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            update_freq=args.precondition_frequency,
+            power=args.shampoo_power,
+            max_precond_dim=args.max_precond_dim,
+        )
+    elif args.opt == "shampoo_sania":
+        opt = Shampoo(
+            group_specs,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            update_freq=args.precondition_frequency,
+            power=0.5,  # sania uses power=0.5
+            max_precond_dim=args.max_precond_dim,
+        )
+    elif args.opt == "shampoo_single":
+        opt = ShampooSingle(
+            group_specs,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            update_freq=args.precondition_frequency,
+            power=args.shampoo_power,
+            side=args.shampoo_side,
+            max_precond_dim=args.max_precond_dim,
+        )
+    elif args.opt == "shampoo_single_sania":
+        opt = ShampooSingle(
+            group_specs,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            update_freq=args.precondition_frequency,
+            power=0.5,  # sania uses power=0.5
+            side=args.shampoo_side,
+            max_precond_dim=args.max_precond_dim,
         )
     elif args.opt == "muon":
         param_list = (

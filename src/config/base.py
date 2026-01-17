@@ -87,6 +87,11 @@ def parse_args(base_parser, args, namespace):
             "sgd",
             "muon",
             "soap",
+            "soap_sania",
+            "shampoo",
+            "shampoo_sania",
+            "shampoo_single",
+            "shampoo_single_sania",
             "ademamix",
             "lion",
             "sf-adamw",
@@ -122,6 +127,9 @@ def parse_args(base_parser, args, namespace):
     parser.add_argument("--normalize_grads", default=False, type=bool)
     parser.add_argument("--soap_data_format", default="channels_first", type=str)
     parser.add_argument("--correct_bias", default=True, type=bool)
+    parser.add_argument("--shampoo_power", default=0.25, type=float)  # 0.25 for standard, 0.5 for sania
+    parser.add_argument("--soap_power", default=0.5, type=float)  # 0.5 for standard, 1.0 for sania
+    parser.add_argument("--shampoo_side", default="left", type=str, choices=["left", "right"])
     parser.add_argument("--nesterov", default=False, type=bool)
     parser.add_argument("--muon_ns_steps", default=5, type=int)
     parser.add_argument("--muon_lr_factor", default=1.0, type=float)

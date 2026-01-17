@@ -66,6 +66,7 @@ class SOAP(torch.optim.Optimizer):
         normalize_grads: bool = False,
         data_format: str = "channels_first",
         correct_bias: bool = True,
+        power: float = 0.5,  # 0.5 for sqrt (standard), 1.0 for no sqrt (sania)
     ):
         defaults = {
             "lr": lr,
@@ -79,6 +80,7 @@ class SOAP(torch.optim.Optimizer):
             "precondition_1d": precondition_1d,
             "normalize_grads": normalize_grads,
             "correct_bias": correct_bias,
+            "power": power,
         }
         super().__init__(params, defaults)
         self._data_format = data_format
@@ -184,7 +186,8 @@ class SOAP(torch.optim.Optimizer):
                     grad_projected.square(), alpha=(1.0 - beta2)
                 )
 
-                denom = exp_avg_sq.sqrt().add_(group["eps"])
+                # power=0.5 gives sqrt (standard Adam), power=1.0 gives no sqrt (sania)
+                denom = exp_avg_sq.pow(group["power"]).add_(group["eps"])
 
                 # Projecting the exponential moving average of gradients to the eigenbases of Shampoo's preconditioner
                 # i.e. projecting to the eigenbases of matrices in state['GG']
@@ -199,7 +202,7 @@ class SOAP(torch.optim.Optimizer):
                 if group["correct_bias"]:
                     bias_correction1 = 1.0 - beta1 ** (state["step"])
                     bias_correction2 = 1.0 - beta2 ** (state["step"])
-                    step_size = step_size * (bias_correction2**0.5) / bias_correction1
+                    step_size = step_size * (bias_correction2**group["power"]) / bias_correction1
 
                 # Projecting back the preconditioned (by Adam) exponential moving average of gradients
                 # to the original space
