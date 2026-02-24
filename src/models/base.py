@@ -178,10 +178,10 @@ class GPTBase(nn.Module):
                     std=self.config.init_std / math.sqrt(2 * config.n_layer),
                 )
 
-    def get_num_params(self, non_embedding=True):
+    def get_num_params(self, non_embedding=False):
         """
         Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
+        For non-embedding count, the position embeddings get subtracted.
         The token embeddings would too, except due to the parameter sharing these
         params are actually used as weights in the final layer, so we include them.
         """

@@ -1,6 +1,19 @@
 """
-Here is an original implementation of Muon. 
-Source: https://github.com/KellerJordan/modded-nanogpt
+SignMuon: Alternating cheap and full Muon optimizer.
+
+Motivation: Muon (Newton-Schulz orthogonalization) is expensive per iteration but
+gives high-quality spectral-norm updates. We can save wall time by doing full Muon
+every K steps and using a cheaper update in between.
+
+Cheap update modes:
+- "sign": sign(momentum) — infinity-norm LMO, cheapest but lowest quality
+- "norm": momentum / ‖momentum‖_F — Frobenius-norm LMO, preserves gradient magnitudes
+- "cheap_ns": NS with fewer steps (e.g. 1-2) — still spectral, much better than sign
+- "cached": reuse last full Muon direction — zero compute, full spectral quality
+
+References:
+- Muon: MomentUm Orthogonalized by Newton-Schulz (Keller Jordan, modded-nanogpt)
+- SignSGD / Signum: Bernstein et al., "signSGD: Compressed Optimisation for Non-Convex Problems"
 """
 
 import os
@@ -8,69 +21,42 @@ import os
 import torch
 import torch.distributed as dist
 
+from .muon import zeropower_via_newtonschulz5
 from .schedule import cos_inf_schedule, cosine_wsd_decay_schedule, wsd_schedule
 
 
-@torch.compile
-def zeropower_via_newtonschulz5(G, steps=10, eps=1e-7):
+class SignMuon(torch.optim.Optimizer):
     """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
-    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
-    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
-    zero even beyond the point where the iteration no longer converges all the way to one everywhere
-    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
-    where S' is diagonal with S_{ii}' \sim Uniform(0.5, 1.5), which turns out not to hurt model
-    performance at all relative to UV^T, where USV^T = G is the SVD.
-    """
-    assert len(G.shape) == 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    X /= X.norm() + eps  # ensure top singular value <= 1
-    if G.size(0) > G.size(1):
-        X = X.T
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if G.size(0) > G.size(1):
-        X = X.T
-    return X
-
-
-class Muon(torch.optim.Optimizer):
-    """
-    Muon - MomentUm Orthogonalized by Newton-schulz
-
-    Muon internally runs standard SGD-momentum, and then performs an orthogonalization post-
-    processing step, in which each 2D parameter's update is replaced with the nearest orthogonal
-    matrix. To efficiently orthogonalize each update, we use a Newton-Schulz iteration, which has
-    the advantage that it can be stably run in bfloat16 on the GPU.
-
-    Some warnings:
-    - We believe this optimizer is unlikely to work well for training with small batch size.
-    - We believe it may not work well for finetuning pretrained models, but we haven't tested this.
+    SignMuon alternates between a cheap update and full Muon for 2D parameters.
+    For non-2D parameters (embeddings, biases, layernorms), it always uses AdamW.
 
     Arguments:
-        muon_params: The parameters to be optimized by Muon.
-        lr: The learning rate. The updates will have spectral norm of `lr`. (0.02 is a good default)
-        momentum: The momentum used by the internal SGD. (0.95 is a good default)
-        nesterov: Whether to use Nesterov-style momentum in the internal SGD. (recommended)
-        ns_steps: The number of Newton-Schulz iterations to run. (6 is probably always enough)
-        adamw_params: The parameters to be optimized by AdamW. Any parameters in `muon_params` which are
-        {0, 1}-D or are detected as being the embed or lm_head will be optimized by AdamW as well.
-        adamw_lr: The learning rate for the internal AdamW.
-        adamw_betas: The betas for the internal AdamW.
-        adamw_eps: The epsilon for the internal AdamW.
-        adamw_wd: The weight decay for the internal AdamW.
+        muon_params: Parameters to optimize.
+        lr: Learning rate for Muon steps.
+        cheap_lr: Learning rate for cheap steps. If None, defaults to lr.
+        momentum: Momentum coefficient (shared between phases).
+        nesterov: Use Nesterov momentum.
+        ns_steps: Newton-Schulz steps for full Muon.
+        muon_every_k: Full Muon every K steps, cheap update for the rest.
+        cheap_mode: "sign" | "norm" | "cheap_ns" | "cached"
+        cheap_ns_steps: NS steps for cheap_ns mode (default 2).
+        sign_scaling: "muon" (frob+aspect), "frob" (frob only), "none" (raw sign).
+        adamw_params: Parameters to always optimize with AdamW.
+        adamw_lr, adamw_betas, adamw_eps, adamw_wd: AdamW hyperparameters.
     """
 
     def __init__(
         self,
         muon_params,
         lr=0.02,
+        cheap_lr=None,
         momentum=0.95,
         nesterov=True,
         ns_steps=6,
+        muon_every_k=5,
+        cheap_mode="norm",
+        cheap_ns_steps=2,
+        sign_scaling="muon",
         weight_decay=0.0,
         adamw_params=None,
         adamw_lr=3e-4,
@@ -78,15 +64,25 @@ class Muon(torch.optim.Optimizer):
         adamw_eps=1e-8,
         adamw_wd=0,
     ):
+        if cheap_lr is None:
+            if cheap_mode in ("sign", "norm"):
+                cheap_lr = lr * 0.25  # sign/norm need ~4x smaller LR (empirical)
+            else:
+                cheap_lr = lr
 
         defaults = dict(
             lr=lr,
+            cheap_lr=cheap_lr,
             momentum=momentum,
             nesterov=nesterov,
             ns_steps=ns_steps,
+            muon_every_k=muon_every_k,
+            cheap_mode=cheap_mode,
+            cheap_ns_steps=cheap_ns_steps,
+            sign_scaling=sign_scaling,
             weight_decay=weight_decay,
             adamw_lr=adamw_lr,
-            adamw_lr_ratio=adamw_lr / lr,
+            adamw_lr_ratio=adamw_lr / lr if lr > 0 else 1.0,
             adamw_betas=adamw_betas,
             adamw_eps=adamw_eps,
             adamw_wd=adamw_wd,
@@ -97,17 +93,15 @@ class Muon(torch.optim.Optimizer):
         params.extend(adamw_params)
         super().__init__(params, defaults)
 
-        # Sort parameters into those for which we will use Muon, and those for which we will not
         for p in muon_params:
-            # Use Muon for every parameter in muon_params which is >= 2D and doesn't look like an embedding or head layer
             if p.ndim >= 2 and p.size(0) < 10000:
                 self.state[p]["use_muon"] = True
-            # self.state[p]["use_muon"] = True
             else:
                 self.state[p]["use_muon"] = False
         for p in adamw_params:
-            # Do not use Muon for parameters in adamw_params
             self.state[p]["use_muon"] = False
+
+        self._step_count = 0
 
         if "WORLD_SIZE" in os.environ:
             self.world_size = int(os.environ["WORLD_SIZE"])
@@ -116,26 +110,79 @@ class Muon(torch.optim.Optimizer):
             self.world_size = 1
             self.rank = 0
 
+    def _is_muon_step(self):
+        k = self.param_groups[0]["muon_every_k"]
+        if k <= 1:
+            return True
+        return (self._step_count % k) == 0
+
+    def _muon_update(self, g, ns_steps):
+        """Muon update with Moonshot RMS-matching scaling."""
+        g = zeropower_via_newtonschulz5(g, steps=ns_steps)
+        g *= 0.2 * max(g.size(0), g.size(1)) ** 0.5
+        return g
+
+    def _cheap_update(self, g, mode, cheap_ns_steps, sign_scaling="muon", cached_dir=None):
+        """Cheap update: sign, normalized, reduced NS steps, or cached direction."""
+        if mode == "sign":
+            update = g.sign()
+            rows, cols = g.size(0), g.size(1) if g.ndim >= 2 else 1
+            if sign_scaling == "muon":
+                update /= max(rows, cols) ** 0.5
+                update *= max(1, rows / cols) ** 0.5
+            elif sign_scaling == "frob":
+                update /= max(rows, cols) ** 0.5
+            # sign_scaling == "none": raw sign, no normalization
+            return update
+        elif mode == "norm":
+            # Frobenius-norm LMO: normalize to unit Frobenius norm,
+            # then scale to match Muon's output norm ≈ sqrt(min(rows, cols))
+            nrm = g.norm() + 1e-7
+            update = g / nrm
+            update *= min(g.size(0), g.size(1)) ** 0.5
+            update *= max(1, g.size(0) / g.size(1)) ** 0.5
+            return update
+        elif mode == "cheap_ns":
+            return self._muon_update(g, ns_steps=cheap_ns_steps)
+        elif mode == "cached":
+            if cached_dir is not None:
+                return cached_dir
+            # First step before any Muon — fall back to norm
+            nrm = g.norm() + 1e-7
+            update = g / nrm
+            update *= min(g.size(0), g.size(1)) ** 0.5
+            update *= max(1, g.size(0) / g.size(1)) ** 0.5
+            return update
+        else:
+            raise ValueError(f"Unknown cheap_mode: {mode}")
+
     def step(self):
+        is_muon = self._is_muon_step()
+        self._step_count += 1
 
         for group in self.param_groups:
 
             ############################
-            #           Muon           #
+            #   Muon / cheap (2D)      #
             ############################
 
             params = [p for p in group["params"] if self.state[p]["use_muon"]]
-            lr = group["lr"]
             momentum = group["momentum"]
+            cheap_mode = group["cheap_mode"]
+            cheap_ns_steps = group["cheap_ns_steps"]
 
-            # generate weight updates in distributed fashion
+            if is_muon:
+                lr = group["lr"]
+            else:
+                lr = group["cheap_lr"]
+
+            # Distributed: compute updates, flatten, all-reduce
             total_params = sum(p.numel() for p in params)
             updates_flat = torch.zeros(
                 total_params, device="cuda", dtype=torch.bfloat16
             )
             curr_idx = 0
             for i, p in enumerate(params):
-                # luckily this will perfectly distribute a transformer with multiple of 4 layers to 8 GPUs
                 if i % self.world_size == self.rank:
                     g = p.grad
                     if g.ndim > 2:
@@ -148,16 +195,22 @@ class Muon(torch.optim.Optimizer):
                     buf.mul_(momentum).add_(g)
                     if group["nesterov"]:
                         g = g.add(buf, alpha=momentum)
-                    g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
-                    g *= max(1, g.size(0) / g.size(1)) ** 0.5
+                    else:
+                        g = buf.clone()
+
+                    if is_muon:
+                        g = self._muon_update(g, ns_steps=group["ns_steps"])
+                        state["cached_direction"] = g.clone()
+                    else:
+                        cached_dir = state.get("cached_direction", None)
+                        g = self._cheap_update(g, cheap_mode, cheap_ns_steps, group["sign_scaling"], cached_dir)
+
                     updates_flat[curr_idx : curr_idx + p.numel()] = g.flatten()
                 curr_idx += p.numel()
 
-            # sync updates across devices. we are not memory-constrained so can do this simple deserialization
             if self.world_size > 1:
                 dist.all_reduce(updates_flat, op=dist.ReduceOp.SUM)
 
-            # deserialize and apply updates
             curr_idx = 0
             wd = group["weight_decay"]
             for p in params:
@@ -176,9 +229,7 @@ class Muon(torch.optim.Optimizer):
             ############################
 
             params = [p for p in group["params"] if not self.state[p]["use_muon"]]
-            lr = (
-                group["adamw_lr_ratio"] * group["lr"]
-            )  # in order for lr schedule to work
+            lr = group["adamw_lr_ratio"] * group["lr"]
             beta1, beta2 = group["adamw_betas"]
             eps = group["adamw_eps"]
             weight_decay = group["adamw_wd"]
@@ -207,70 +258,10 @@ class Muon(torch.optim.Optimizer):
                 p.data.add_(g, alpha=-lr / scale)
 
 
-def separate_params(param_groups):
-    param_groups_2d = []
-    param_groups_non2d = []
-    total_param_2d_count = 0
-    total_param_non2d_count = 0
-
-    # Check if param_groups is a list of dicts or list of params
-    if (
-        isinstance(param_groups, list) and isinstance(param_groups[0], dict)
-    ) or isinstance(param_groups, dict):
-        if isinstance(param_groups, dict):
-            param_groups = [param_groups]
-        # param_groups is a list of dicts
-        for group in param_groups:
-            (
-                params_2d,
-                params_non2d,
-                param_2d_count,
-                param_non2d_count,
-            ) = separate_params(group["params"])
-            param_group_2d = {"params": params_2d}
-            param_group_non2d = {"params": params_non2d}
-            # Copy the group dict and replace the 'params' key with the separated params
-            for k in group.keys():
-                if k != "params":
-                    param_group_2d[k] = group[k]
-                    param_group_non2d[k] = group[k]
-
-            param_groups_2d.append(param_group_2d)
-            param_groups_non2d.append(param_group_non2d)
-            total_param_2d_count += param_2d_count
-            total_param_non2d_count += param_non2d_count
-
-        return (
-            param_groups_2d,
-            param_groups_non2d,
-            total_param_2d_count,
-            total_param_non2d_count,
-        )
-
-    elif isinstance(param_groups, list) and isinstance(param_groups[0], torch.Tensor):
-        params_2d = []
-        params_non2d = []
-        param_group = param_groups
-        # param_group is a list of param tensors
-        for param in param_group:
-            if param.ndim == 2:
-                params_2d.append(param)
-            else:
-                params_non2d.append(param)
-        return params_2d, params_non2d, len(params_2d), len(params_non2d)
-    else:
-        breakpoint()
-
-
-class CombinedScheduler:
+class SignMuonScheduler:
     """
-    CombinedScheduler implements a scheduler for the Muon optimizer: it leverages both Muon and AdamW learning rates, and applies the same sort of scheduler for both of them.
-
-    Arguments:
-        optimizer: Muon optimizer.
-        cfg: arguments used for schedulers.
-        muon_lr_key: defaults["lr"] is responsible for the Muon learning rate.
-        adamw_lr_key: defaults["adamw_r"] is responsible for the AdamW learning rate.
+    Scheduler for SignMuon optimizer, handling both muon-phase LR and adamw LR.
+    Similar to CombinedScheduler from muon.py.
     """
 
     def __init__(self, optimizer, cfg, muon_lr_key="lr", adamw_lr_key="adamw_lr"):

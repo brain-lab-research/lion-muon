@@ -1,4 +1,5 @@
 import copy
+import math
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -194,12 +195,14 @@ def train(
             )
 
             if cfg.wandb:
-                wandb.log(
-                    {
+                # Safe perplexity to avoid OverflowError when loss is large
+                safe_train_pp = math.exp(min(train_loss, 80.0))
+
+                log_dict = {
                         "tokens": tokens,
                         "iter": curr_iter,
                         "train/loss": train_loss,
-                        "train/perplexity": 2.71828**train_loss,
+                        "train/perplexity": safe_train_pp,
                         "lr": current_lrs[0],
                         "iter_dt": dt,
                         "max_grad_norm": max(grad_norms).item() if grad_norms else 0,
@@ -207,7 +210,13 @@ def train(
                             torch.tensor(grad_norms).mean().item() if grad_norms else 0
                         ),
                     }
-                )
+                # Log step type for SignMuon
+                if hasattr(opt, '_is_muon_step'):
+                    # _step_count was already incremented, so check previous step
+                    k = opt.param_groups[0].get("muon_every_k", 1)
+                    was_muon = ((opt._step_count - 1) % k) == 0 if k > 1 else True
+                    log_dict["is_muon_step"] = int(was_muon)
+                wandb.log(log_dict)
 
             grad_norms = []
 

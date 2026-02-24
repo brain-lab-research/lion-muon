@@ -17,6 +17,7 @@ from data.utils import DataReader, get_dataset
 from models.utils import get_model
 from optim.adafactor import Adafactor
 from optim.adammini import Adam_mini
+from optim.adamuon import AdaMuon
 from optim.ademamix import AdEMAMix
 from optim.ademamix2 import AdEMAMix2
 from optim.adopt import ADOPT
@@ -27,6 +28,8 @@ from optim.lamb import Lamb
 from optim.lion import Lion
 from optim.mars import MARS
 from optim.muon import CombinedScheduler, Muon
+from optim.sign_muon import SignMuon, SignMuonScheduler
+from optim.lion_muon import LionMuon, LionMuonScheduler
 from optim.prodigy import Prodigy
 from optim.schedule import (cos_inf_schedule, cosine_wsd_decay_schedule,
                             dd_schedule, wsd_schedule)
@@ -36,6 +39,7 @@ from optim.shampoo import DistributedShampoo
 from optim.sign import Signum
 from optim.soap import SOAP
 from optim.sophia import SophiaG
+# from optim.taia import TAIA
 
 
 def get_args():
@@ -71,7 +75,10 @@ def main(args, parser):
         torch.cuda.set_device(torch.device(args.device))
     # torch.use_deterministic_algorithms(True)  # CUBLAS_WORKSPACE_CONFIG=:4096:8
 
-    exp_name = get_exp_name(args, parser, distributed_backend)
+    if args.experiment_name is not None:
+        exp_name = args.experiment_name
+    else:
+        exp_name = get_exp_name(args, parser, distributed_backend)
     exp_dir = Path(args.results_base_folder) / exp_name
     if distributed_backend.is_master_process() and args.wandb:
         wandb.init(
@@ -84,6 +91,8 @@ def main(args, parser):
         wandb.define_metric("train/*", step_metric="iter")
         wandb.define_metric("val/*", step_metric="iter")
         wandb.define_metric("lr", step_metric="iter")
+        wandb.define_metric("val/loss", summary="min")
+        wandb.define_metric("val/acc", summary="max")
 
     print(f"Starting Experiment: {exp_name}")
     print(f"Experiment Directory: {exp_dir}")
@@ -165,6 +174,79 @@ def main(args, parser):
             momentum=args.momentum,
             nesterov=args.nesterov,
             ns_steps=args.muon_ns_steps,
+            weight_decay=args.weight_decay,
+            adamw_params=None,
+            adamw_lr=args.lr,
+            adamw_betas=(args.beta1, args.beta2),
+            adamw_eps=1e-8,
+            adamw_wd=args.weight_decay,
+        )
+    elif args.opt == "lion_muon":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert sum(p.numel() for p in param_list) == params_cnt
+        opt = LionMuon(
+            muon_params=param_list,
+            lr=args.muon_lr_factor,
+            lion_lr=args.sign_lr,
+            beta1=args.beta1,
+            beta2=args.beta2,
+            ns_steps=args.muon_ns_steps,
+            muon_every_k=args.muon_every_k,
+            weight_decay=args.weight_decay,
+            adamw_params=None,
+            adamw_lr=args.lr,
+            adamw_betas=(args.beta1, args.beta2),
+            adamw_eps=1e-8,
+            adamw_wd=args.weight_decay,
+        )
+    elif args.opt == "sign_muon":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert (
+            sum(p.numel() for p in param_list) == params_cnt
+        ), "number of parameters must be the same"
+        opt = SignMuon(
+            muon_params=param_list,
+            lr=args.muon_lr_factor,
+            cheap_lr=args.sign_lr,
+            momentum=args.momentum,
+            nesterov=args.nesterov,
+            ns_steps=args.muon_ns_steps,
+            muon_every_k=args.muon_every_k,
+            cheap_mode=args.cheap_mode,
+            cheap_ns_steps=args.cheap_ns_steps,
+            sign_scaling=args.sign_scaling,
+            weight_decay=args.weight_decay,
+            adamw_params=None,
+            adamw_lr=args.lr,
+            adamw_betas=(args.beta1, args.beta2),
+            adamw_eps=1e-8,
+            adamw_wd=args.weight_decay,
+        )
+    elif args.opt == "adamuon":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert (
+            sum(p.numel() for p in param_list) == params_cnt
+        ), "number of parameters must be the same"
+        opt = AdaMuon(
+            params=param_list,
+            lr=args.lr,
+            momentum=args.momentum,
+            ns_steps=args.adamuon_ns_steps,
+            weight_decay=args.weight_decay,
+            eps=1e-8,
+            rms_alignment_factor=args.adamuon_rms_factor,
             adamw_params=None,
             adamw_lr=args.lr,
             adamw_betas=(args.beta1, args.beta2),
@@ -300,6 +382,42 @@ def main(args, parser):
             eps=1e-6,
             weight_decay=args.weight_decay,
         )
+    elif args.opt == "rmsspectral":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert (
+            sum(p.numel() for p in param_list) == params_cnt
+        ), "number of parameters must be the same"
+        opt = AdaMuon(
+            group_specs,
+            lr=args.lr,
+            momentum=args.momentum,
+            ns_steps=args.adamuon_ns_steps,
+            weight_decay=args.weight_decay,
+            eps=1e-8,
+            mode='rmsspectral',
+        )
+    elif args.opt == "rmsspectral-sania":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert (
+            sum(p.numel() for p in param_list) == params_cnt
+        ), "number of parameters must be the same"
+        opt = AdaMuon(
+            group_specs,
+            lr=args.lr,
+            momentum=args.momentum,
+            ns_steps=args.adamuon_ns_steps,
+            weight_decay=args.weight_decay,
+            eps=1e-5,
+            mode='rmsspectral-sania',
+        )
     elif args.opt in [
         "clip-adagrad",
         "clip-adagrad-delay-eta",
@@ -400,8 +518,8 @@ def main(args, parser):
                     div_factor=1e2,
                     final_div_factor=1,
                 )
-                if args.opt != "muon"
-                else CombinedScheduler(opt, args)
+                if args.opt not in ("muon", "sign_muon")
+                else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
             )
         elif args.scheduler == "cos_inf":
             lambda_schedule = cos_inf_schedule(
@@ -413,8 +531,8 @@ def main(args, parser):
             )
             scheduler = (
                 torch.optim.lr_scheduler.LambdaLR(opt, lambda_schedule)
-                if args.opt != "muon"
-                else CombinedScheduler(opt, args)
+                if args.opt not in ("muon", "sign_muon")
+                else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
             )
         elif args.scheduler == "wsd":
             lambda_schedule = wsd_schedule(
@@ -427,8 +545,8 @@ def main(args, parser):
             )
             scheduler = (
                 torch.optim.lr_scheduler.LambdaLR(opt, lambda_schedule)
-                if args.opt != "muon"
-                else CombinedScheduler(opt, args)
+                if args.opt not in ("muon", "sign_muon")
+                else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
             )
         elif args.scheduler == "cos_wsd":
             lambda_schedule = cosine_wsd_decay_schedule(

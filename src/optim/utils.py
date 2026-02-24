@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
+import math
 import torch
 import torch.distributed as dist
 
@@ -44,7 +45,8 @@ def eval(
 
     val_acc = torch.stack(acc_list).mean().item()
     val_loss = torch.stack(loss_list_val).mean().item()
-    val_perplexity = 2.71828**val_loss
+    # Safe perplexity to avoid OverflowError for large losses
+    val_perplexity = math.exp(min(val_loss, 80.0))
 
     return val_acc, val_loss, val_perplexity
 

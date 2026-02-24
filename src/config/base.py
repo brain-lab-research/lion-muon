@@ -86,8 +86,18 @@ def parse_args(base_parser, args, namespace):
         choices=[
             "adamw",
             "sgd",
+            "taia",
             "muon",
+            "sign_muon",
+            "lion_muon",
+            "adamuon",
+            "rmsspectral",
+            "rmsspectral-sania",
+            "adam-sania",
             "soap",
+            "soap-sania",
+            "shampoo",
+            "shampoo-sania",
             "ademamix",
             "ademamix2",
             "lion",
@@ -130,6 +140,18 @@ def parse_args(base_parser, args, namespace):
     parser.add_argument("--nesterov", default=False, type=bool)
     parser.add_argument("--muon_ns_steps", default=5, type=int)
     parser.add_argument("--muon_lr_factor", default=1.0, type=float)
+    parser.add_argument("--sign_lr", default=None, type=float)  # cheap step lr in sign_muon; defaults to muon_lr_factor
+    parser.add_argument("--muon_every_k", default=5, type=int)  # Muon every K steps, cheap for the rest
+    parser.add_argument("--cheap_mode", default="norm", type=str, choices=["sign", "norm", "cheap_ns", "cached"])
+    parser.add_argument("--cheap_ns_steps", default=2, type=int)  # NS steps for cheap_ns mode
+    parser.add_argument("--sign_scaling", default="muon", type=str, choices=["muon", "frob", "none"])  # sign update scaling
+    parser.add_argument("--adamuon_ns_steps", default=6, type=int)
+    parser.add_argument("--adamuon_rms_factor", default=0.2, type=float)
+    parser.add_argument("--taia_ns_steps", default=6, type=int)
+    parser.add_argument("--taia_lr_factor", default=0.02, type=float)
+    parser.add_argument("--taia_lmo", default="spectral", type=str)
+    parser.add_argument("--taia_precondition_type", default="adam", type=str)
+    parser.add_argument("--taia_orth_algo", default="ns", type=str)
     parser.add_argument("--adema_beta3", default=0.9, type=float)
     parser.add_argument("--adema_alpha", default=2.0, type=float)
     parser.add_argument("--adema_beta3_warmup", default=None, type=int)
