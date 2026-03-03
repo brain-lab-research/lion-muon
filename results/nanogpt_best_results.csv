@@ -1,6 +1,0 @@
-optimizer,run_name,lr,final_train_loss,final_val_loss,final_val_acc,iterations
-adamw,32x1(rank=0)_model-base_dataset-fineweb_opt-adamw__device-cuda:6_scheduler-wsd_iterations-10000_warmup_steps-1000_lr-0.0003_n_layer-12,0.0003,4.247349739074707,4.3287177085876465,0.29445648193359375,10000
-muon,32x1(rank=0)_model-base_dataset-fineweb_opt-muon__device-cuda:6_scheduler-wsd_iterations-10000_warmup_steps-1000_lr-0.0003_momentum-0.95_nesterov-True_muon_ns_steps-6_muon_lr_factor-0.02_n_layer-12,0.0003,4.323155403137207,4.431227684020996,0.2857036590576172,10000
-rmsspectral,32x1(rank=0)_model-base_dataset-fineweb_opt-rmsspectral__device-cuda:6_scheduler-wsd_iterations-10000_warmup_steps-1000_lr-0.0003_muon_ns_steps-6_n_layer-12,0.0003,4.232551097869873,4.3012847900390625,0.2959880828857422,10000
-adamuon,32x1(rank=0)_model-base_dataset-fineweb_opt-adamuon__device-cuda:6_scheduler-wsd_iterations-10000_warmup_steps-1000_lr-0.0003_momentum-0.95_muon_ns_steps-6_n_layer-12,0.0003,4.237244606018066,4.310020446777344,0.295562744140625,10000
-rmsspectral-sania,32x1(rank=0)_model-base_dataset-fineweb_opt-rmsspectral-sania__device-cuda:6_scheduler-wsd_iterations-10000_warmup_steps-1000_lr-0.0003_muon_ns_steps-6_n_layer-12,0.0003,4.231597900390625,4.301455974578857,0.29611968994140625,10000

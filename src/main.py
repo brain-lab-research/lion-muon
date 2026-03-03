@@ -86,6 +86,7 @@ def main(args, parser):
             name=exp_name,
             config=vars(args),
             entity=args.wandb_entity,
+            settings=wandb.Settings(init_timeout=300),
         )
         wandb.define_metric("iter")
         wandb.define_metric("train/*", step_metric="iter")
@@ -502,25 +503,19 @@ def main(args, parser):
             args.warmup_steps < args.iterations
         ), "Warmup steps must be < iterations."  # from schedules-and-scaling
         if args.scheduler in ["cos", "linear"]:
-            # initial lr is args.lr / div_factor
-            # final lr is initial_lr/final_div_factor = args.lr / div_factor / final_div_factor
-            scheduler = (
-                torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer=opt,
-                    max_lr=[
-                        group.get("lr", args.lr) for group in group_specs
-                    ],  # it was args.lr
-                    total_steps=args.iterations,
-                    pct_start=args.warmup_steps
-                    / args.iterations,  # it was args.warmup_percent
-                    anneal_strategy=args.scheduler,
-                    cycle_momentum=False,
-                    div_factor=1e2,
-                    final_div_factor=1,
+            # Warmup + CosineAnnealingLR (decays to 0)
+            if args.opt not in ("muon", "sign_muon", "lion_muon"):
+                warmup_sched = torch.optim.lr_scheduler.LinearLR(
+                    opt, start_factor=1e-2, total_iters=args.warmup_steps
                 )
-                if args.opt not in ("muon", "sign_muon")
-                else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
-            )
+                cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=args.iterations - args.warmup_steps, eta_min=0
+                )
+                scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    opt, [warmup_sched, cosine_sched], milestones=[args.warmup_steps]
+                )
+            else:
+                scheduler = (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
         elif args.scheduler == "cos_inf":
             lambda_schedule = cos_inf_schedule(
                 n_iterations=args.iterations,
@@ -531,7 +526,7 @@ def main(args, parser):
             )
             scheduler = (
                 torch.optim.lr_scheduler.LambdaLR(opt, lambda_schedule)
-                if args.opt not in ("muon", "sign_muon")
+                if args.opt not in ("muon", "sign_muon", "lion_muon")
                 else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
             )
         elif args.scheduler == "wsd":
@@ -545,7 +540,7 @@ def main(args, parser):
             )
             scheduler = (
                 torch.optim.lr_scheduler.LambdaLR(opt, lambda_schedule)
-                if args.opt not in ("muon", "sign_muon")
+                if args.opt not in ("muon", "sign_muon", "lion_muon")
                 else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
             )
         elif args.scheduler == "cos_wsd":

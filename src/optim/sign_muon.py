@@ -266,9 +266,19 @@ class SignMuonScheduler:
 
     def __init__(self, optimizer, cfg, muon_lr_key="lr", adamw_lr_key="adamw_lr"):
         self.schedulers = []
+        def _make_cos_scheduler(opt, lr):
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                opt, start_factor=1e-2, total_iters=cfg.warmup_steps
+            )
+            cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=cfg.iterations - cfg.warmup_steps, eta_min=0
+            )
+            return torch.optim.lr_scheduler.SequentialLR(
+                opt, [warmup, cosine], milestones=[cfg.warmup_steps]
+            )
+
         scheduler_map = {
-            "cos": torch.optim.lr_scheduler.OneCycleLR,
-            "linear": torch.optim.lr_scheduler.OneCycleLR,
+            "cos": _make_cos_scheduler,
             "cos_inf": lambda opt, lr: torch.optim.lr_scheduler.LambdaLR(
                 opt,
                 cos_inf_schedule(
@@ -309,21 +319,9 @@ class SignMuonScheduler:
             if lr_key in group:
                 scheduler_cls = scheduler_map.get(cfg.scheduler, None)
                 if scheduler_cls:
-                    if cfg.scheduler in ["cos", "linear"]:
-                        scheduler = scheduler_cls(
-                            optimizer,
-                            max_lr=[group.get(lr_key, getattr(cfg, lr_key.lower()))],
-                            total_steps=cfg.iterations,
-                            pct_start=cfg.warmup_steps / cfg.iterations,
-                            anneal_strategy=cfg.scheduler,
-                            cycle_momentum=False,
-                            div_factor=1e2,
-                            final_div_factor=1,
-                        )
-                    else:
-                        scheduler = scheduler_cls(
-                            optimizer, group.get(lr_key, getattr(cfg, lr_key.lower()))
-                        )
+                    scheduler = scheduler_cls(
+                        optimizer, group.get(lr_key, getattr(cfg, lr_key.lower()))
+                    )
                     self.schedulers.append(scheduler)
 
     def step(self):

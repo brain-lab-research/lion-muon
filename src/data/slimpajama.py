@@ -8,7 +8,7 @@ from tqdm import tqdm
 tknzr = tiktoken.get_encoding("gpt2")
 
 
-def get_slimpajama_data(datasets_dir, num_proc=40):
+def get_slimpajama_data(datasets_dir, num_proc=5):
     SPJ_DATA_PATH = os.path.join(datasets_dir, "slimpajama6B/")
     if not os.path.exists(os.path.join(SPJ_DATA_PATH, "train.bin")):
         os.makedirs(SPJ_DATA_PATH, exist_ok=True)
@@ -63,7 +63,7 @@ def get_slimpajama_data(datasets_dir, num_proc=40):
     }
 
 
-def get_slimpajama_chunk1(datasets_dir, num_proc=40):
+def get_slimpajama_chunk1(datasets_dir, num_proc=5):
     SPJ_DATA_PATH = os.path.join(datasets_dir, "slimpajama6B/")
     SPJ_CHUNK_1_DATA_PATH = os.path.join(SPJ_DATA_PATH, "chunk1")
     if not os.path.exists(os.path.join(SPJ_CHUNK_1_DATA_PATH, "train.bin")):

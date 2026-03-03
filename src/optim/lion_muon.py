@@ -201,7 +201,19 @@ class LionMuonScheduler:
 
     def __init__(self, optimizer, cfg):
         self.schedulers = []
+        def _make_cos_scheduler(opt, lr):
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                opt, start_factor=1e-2, total_iters=cfg.warmup_steps
+            )
+            cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, T_max=cfg.iterations - cfg.warmup_steps, eta_min=0
+            )
+            return torch.optim.lr_scheduler.SequentialLR(
+                opt, [warmup, cosine], milestones=[cfg.warmup_steps]
+            )
+
         scheduler_map = {
+            "cos": _make_cos_scheduler,
             "wsd": lambda opt, lr: torch.optim.lr_scheduler.LambdaLR(
                 opt,
                 wsd_schedule(

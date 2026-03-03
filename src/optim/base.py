@@ -243,7 +243,7 @@ def eval_and_log(
     if cfg.opt == "sf-sgd" or cfg.opt == "sf-adamw":
         opt.eval()
 
-    if curr_iter == cfg.iterations or full_eval:
+    if full_eval:
         max_num_batches = val_reader.num_batches()
     else:
         max_num_batches = cfg.eval_batches
