@@ -112,11 +112,21 @@ run "spj_lionmuon_k20" \
   --sign_lr 5e-5 --muon_every_k 20 \
   --beta1 0.95 --beta2 0.99
 
-# LionMuon K=1: every step is Muon but with Lion dual EMA (β1=0.95,β2=0.99)
+# LiMuon K=1: every step is Muon but with Lion dual EMA (β1=0.95,β2=0.99)
 # This is NOT the same as "Muon" which uses SGD momentum (μ=0.95)
 run "spj_lionmuon_k1" \
   --opt lion_muon --lr 2e-3 --muon_lr_factor 2e-3 \
   --muon_every_k 1 \
+  --beta1 0.95 --beta2 0.99
+
+run "spj_signmuon_k100" \
+  --opt sign_muon --lr 5e-3 --muon_lr_factor 5e-3 \
+  --sign_lr 5e-5 --muon_every_k 100 --cheap_mode sign --sign_scaling none \
+  --momentum 0.95 --nesterov True --beta1 0.9 --beta2 0.95
+
+run "spj_lionmuon_k100" \
+  --opt lion_muon --lr 5e-3 --muon_lr_factor 5e-3 \
+  --sign_lr 5e-5 --muon_every_k 100 \
   --beta1 0.95 --beta2 0.99
 
 echo "Waiting for remaining jobs..."
