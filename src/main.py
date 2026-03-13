@@ -1,5 +1,4 @@
 import argparse
-import copy
 import inspect
 import json
 import os
@@ -12,7 +11,7 @@ import torch
 
 import config
 import distributed
-import wandb
+from torch.utils.tensorboard import SummaryWriter
 from data.utils import DataReader, get_dataset
 from models.utils import get_model
 from optim.adafactor import Adafactor
@@ -61,6 +60,7 @@ def main(args, parser):
     distributed_backend = distributed.make_backend_from_args(args)
     args = distributed_backend.get_adjusted_args_for_process(args)
     args.world_size = distributed_backend.get_world_size()
+    args.datasets_dir = os.path.expanduser(args.datasets_dir)
 
     if args.full_eval_at is None:
         args.full_eval_at = []
@@ -80,20 +80,16 @@ def main(args, parser):
     else:
         exp_name = get_exp_name(args, parser, distributed_backend)
     exp_dir = Path(args.results_base_folder) / exp_name
-    if distributed_backend.is_master_process() and args.wandb:
-        wandb.init(
-            project=args.wandb_project,
-            name=exp_name,
-            config=vars(args),
-            entity=args.wandb_entity,
-            settings=wandb.Settings(init_timeout=300),
-        )
-        wandb.define_metric("iter")
-        wandb.define_metric("train/*", step_metric="iter")
-        wandb.define_metric("val/*", step_metric="iter")
-        wandb.define_metric("lr", step_metric="iter")
-        wandb.define_metric("val/loss", summary="min")
-        wandb.define_metric("val/acc", summary="max")
+    if (exp_dir / "summary.json").exists():
+        print(f"Skipping {exp_name}: already completed (summary.json exists)")
+        distributed_backend.finalize()
+        return
+    args.tb_writer = None
+    if distributed_backend.is_master_process() and args.tensorboard:
+        tb_log_dir = Path(args.results_base_folder) / args.tensorboard_dir / exp_name
+        tb_log_dir.mkdir(parents=True, exist_ok=True)
+        args.tb_writer = SummaryWriter(log_dir=str(tb_log_dir), flush_secs=30)
+        print(f"TensorBoard logging to: {tb_log_dir}")
 
     print(f"Starting Experiment: {exp_name}")
     print(f"Experiment Directory: {exp_dir}")
@@ -124,10 +120,9 @@ def main(args, parser):
     params_cnt = distributed_backend.get_raw_model(model).get_num_params()
     print("number of parameters: %.2fM" % (params_cnt / 1e6,))
     print("number of optimized parameters: %.2fM" % (optimized_params_cnt / 1e6,))
-    if args.wandb and distributed_backend.is_master_process():
-        wandb.log(
-            {"parameters": params_cnt, "optimized_parameters": optimized_params_cnt}
-        )
+    if args.tensorboard and args.tb_writer is not None:
+        args.tb_writer.add_scalar("model/parameters", params_cnt, 0)
+        args.tb_writer.add_scalar("model/optimized_parameters", optimized_params_cnt, 0)
 
     args.world_size = distributed_backend.get_world_size()
 
@@ -595,10 +590,12 @@ def main(args, parser):
         cfg=args,
     )
 
-    stats["args"] = vars(args)
+    stats["args"] = {k: v for k, v in vars(args).items() if isinstance(v, (str, int, float, bool, list, dict, type(None)))}
     if distributed_backend.is_master_process():
         with open(exp_dir / "summary.json", "w") as fs:
             json.dump(stats, fs)
+    if args.tb_writer is not None:
+        args.tb_writer.close()
     distributed_backend.finalize()
 
 
@@ -643,14 +640,12 @@ def get_exp_name(
         "full_eval_at",
         "distributed_backend",
         "latest_ckpt_interval",
-        "wandb",
-        "wandb_project",
-        "wandb_entity",
+        "tensorboard",
+        "tensorboard_dir",
         "batch_size",
         "acc_steps",
         "results_base_folder",
         "run_prefix",
-        "wandb_run_prefix",
     ],
 ):
     # Get the default values

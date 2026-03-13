@@ -1,4 +1,3 @@
-import copy
 import math
 import time
 from contextlib import nullcontext
@@ -6,8 +5,6 @@ from pathlib import Path
 
 import torch
 import yaml
-
-import wandb
 
 # from logger.logger import DynamicsLogger
 from .utils import (eval, get_batch, load_checkpoint, load_worker_state,
@@ -73,6 +70,7 @@ def train(
     stats = {"train_loss": [], "val_loss": [], "val_pp": [], "val_acc": []}
     grad_norms = []
     model.train()
+    wall_t0 = time.time()
 
     while curr_iter <= cfg.iterations:
         # Save permanent checkpoint
@@ -109,6 +107,7 @@ def train(
                 distributed_backend,
                 cfg,
                 opt,
+                stats=stats,
                 full_eval=(curr_iter in cfg.full_eval_at),
             )
 
@@ -194,32 +193,29 @@ def train(
                 f"lr={current_lrs[0]:.2e}"
             )
 
-            if cfg.wandb:
+            stats["train_loss"].append(train_loss)
+
+            tb = getattr(cfg, 'tb_writer', None)
+            if tb is not None:
                 # Safe perplexity to avoid OverflowError when loss is large
                 safe_train_pp = math.exp(min(train_loss, 80.0))
 
-                log_dict = {
-                        "tokens": tokens,
-                        "iter": curr_iter,
-                        "train/loss": train_loss,
-                        "train/perplexity": safe_train_pp,
-                        "lr": current_lrs[0],
-                        "iter_dt": dt,
-                        "max_grad_norm": max(grad_norms).item() if grad_norms else 0,
-                        "mean_grad_norm": (
-                            torch.tensor(grad_norms).mean().item() if grad_norms else 0
-                        ),
-                    }
+                tb.add_scalar("train/loss", train_loss, curr_iter)
+                tb.add_scalar("train/perplexity", safe_train_pp, curr_iter)
+                tb.add_scalar("lr", current_lrs[0], curr_iter)
+                tb.add_scalar("train/iter_dt", dt, curr_iter)
+                tb.add_scalar("train/max_grad_norm", max(grad_norms).item() if grad_norms else 0, curr_iter)
+                tb.add_scalar("train/mean_grad_norm", torch.tensor(grad_norms).mean().item() if grad_norms else 0, curr_iter)
+                tb.add_scalar("tokens", tokens, curr_iter)
                 # Log step type for SignMuon
                 if hasattr(opt, '_is_muon_step'):
-                    # _step_count was already incremented, so check previous step
                     k = opt.param_groups[0].get("muon_every_k", 1)
                     was_muon = ((opt._step_count - 1) % k) == 0 if k > 1 else True
-                    log_dict["is_muon_step"] = int(was_muon)
-                wandb.log(log_dict)
+                    tb.add_scalar("train/is_muon_step", int(was_muon), curr_iter)
 
             grad_norms = []
 
+    stats["wall_time"] = time.time() - wall_t0
     return stats
 
 
@@ -233,6 +229,7 @@ def eval_and_log(
     distributed_backend,
     cfg,
     opt,
+    stats=None,
     full_eval=False,
 ):
     if not distributed_backend.is_master_process():
@@ -267,37 +264,20 @@ def eval_and_log(
         f"val_acc={val_acc:3f}"
     )
 
-    if cfg.wandb:
+    if stats is not None:
+        stats["val_loss"].append(val_loss)
+        stats["val_pp"].append(val_perplexity)
+        stats["val_acc"].append(val_acc)
+
+    tb = getattr(cfg, 'tb_writer', None)
+    if tb is not None:
         if curr_iter == cfg.iterations or full_eval:
-            logs = {
-                "tokens": tokens,
-                "iter": curr_iter,
-                "final-val/loss": val_loss,
-                "final-val/perplexity": val_perplexity,
-                "final-val/acc": val_acc,
-            }
+            tb.add_scalar("final-val/loss", val_loss, curr_iter)
+            tb.add_scalar("final-val/perplexity", val_perplexity, curr_iter)
+            tb.add_scalar("final-val/acc", val_acc, curr_iter)
         else:
-            logs = {
-                "tokens": tokens,
-                "iter": curr_iter,
-                "val/loss": val_loss,
-                "val/perplexity": val_perplexity,
-                "val/acc": val_acc,
-            }
-
-        wandb.log(logs)
-        if cfg.eval_seq_prefix != "none" and (
-            curr_iter % (cfg.eval_interval * 5) == 0 or curr_iter == cfg.iterations
-        ):
-            text_table = wandb.Table(columns=["itr", "val-pp", "text"])
-
-            out_str = distributed_backend.get_raw_model(model).generate_from_string(
-                cfg.eval_seq_prefix,
-                max_new_tokens=40,
-                temperature=0.9,
-                top_k=None,
-            )
-            text_table.add_data(curr_iter, val_perplexity, out_str)
-            # why a copy? see github.com/wandb/wandb/issues/2981
-            wandb.log({f"generated-text-{wandb.run.name}": copy.copy(text_table)})
+            tb.add_scalar("val/loss", val_loss, curr_iter)
+            tb.add_scalar("val/perplexity", val_perplexity, curr_iter)
+            tb.add_scalar("val/acc", val_acc, curr_iter)
+        tb.add_scalar("tokens", tokens, curr_iter)
     model.train()

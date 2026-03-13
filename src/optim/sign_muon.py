@@ -59,7 +59,7 @@ class SignMuon(torch.optim.Optimizer):
         sign_scaling="muon",
         weight_decay=0.0,
         adamw_params=None,
-        adamw_lr=3e-4,
+        adamw_lr=1e-3,
         adamw_betas=(0.95, 0.95),
         adamw_eps=1e-8,
         adamw_wd=0,
@@ -82,7 +82,6 @@ class SignMuon(torch.optim.Optimizer):
             sign_scaling=sign_scaling,
             weight_decay=weight_decay,
             adamw_lr=adamw_lr,
-            adamw_lr_ratio=adamw_lr / lr if lr > 0 else 1.0,
             adamw_betas=adamw_betas,
             adamw_eps=adamw_eps,
             adamw_wd=adamw_wd,
@@ -229,7 +228,7 @@ class SignMuon(torch.optim.Optimizer):
             ############################
 
             params = [p for p in group["params"] if not self.state[p]["use_muon"]]
-            lr = group["adamw_lr_ratio"] * group["lr"]
+            lr = group["adamw_lr"]
             beta1, beta2 = group["adamw_betas"]
             eps = group["adamw_eps"]
             weight_decay = group["adamw_wd"]
@@ -259,13 +258,11 @@ class SignMuon(torch.optim.Optimizer):
 
 
 class SignMuonScheduler:
-    """
-    Scheduler for SignMuon optimizer, handling both muon-phase LR and adamw LR.
-    Similar to CombinedScheduler from muon.py.
-    """
+    """Scheduler for SignMuon. Schedules the Muon LR; AdamW backup LR stays fixed."""
 
-    def __init__(self, optimizer, cfg, muon_lr_key="lr", adamw_lr_key="adamw_lr"):
+    def __init__(self, optimizer, cfg):
         self.schedulers = []
+
         def _make_cos_scheduler(opt, lr):
             warmup = torch.optim.lr_scheduler.LinearLR(
                 opt, start_factor=1e-2, total_iters=cfg.warmup_steps
@@ -279,16 +276,6 @@ class SignMuonScheduler:
 
         scheduler_map = {
             "cos": _make_cos_scheduler,
-            "cos_inf": lambda opt, lr: torch.optim.lr_scheduler.LambdaLR(
-                opt,
-                cos_inf_schedule(
-                    n_iterations=cfg.iterations,
-                    n_warmup=cfg.warmup_steps,
-                    n_inf=cfg.cos_inf_steps,
-                    div_factor=1e2,
-                    final_div_factor=0.1,
-                ),
-            ),
             "wsd": lambda opt, lr: torch.optim.lr_scheduler.LambdaLR(
                 opt,
                 wsd_schedule(
@@ -298,6 +285,16 @@ class SignMuonScheduler:
                     init_div_factor=1e2,
                     final_lr_factor=cfg.wsd_final_lr_scale,
                     decay_type=cfg.decay_type,
+                ),
+            ),
+            "cos_inf": lambda opt, lr: torch.optim.lr_scheduler.LambdaLR(
+                opt,
+                cos_inf_schedule(
+                    n_iterations=cfg.iterations,
+                    n_warmup=cfg.warmup_steps,
+                    n_inf=cfg.cos_inf_steps,
+                    div_factor=1e2,
+                    final_div_factor=0.1,
                 ),
             ),
             "cos_wsd": lambda opt, lr: torch.optim.lr_scheduler.LambdaLR(
@@ -313,27 +310,18 @@ class SignMuonScheduler:
                 ),
             ),
         }
-
         for group in optimizer.param_groups:
-            lr_key = muon_lr_key if muon_lr_key in group else adamw_lr_key
-            if lr_key in group:
-                scheduler_cls = scheduler_map.get(cfg.scheduler, None)
-                if scheduler_cls:
-                    scheduler = scheduler_cls(
-                        optimizer, group.get(lr_key, getattr(cfg, lr_key.lower()))
-                    )
-                    self.schedulers.append(scheduler)
+            scheduler_cls = scheduler_map.get(cfg.scheduler, None)
+            if scheduler_cls:
+                self.schedulers.append(scheduler_cls(optimizer, group["lr"]))
 
     def step(self):
-        for scheduler in self.schedulers:
-            scheduler.step()
+        for s in self.schedulers:
+            s.step()
 
     def state_dict(self):
-        state_dict = {}
-        for i, scheduler in enumerate(self.schedulers):
-            state_dict[f"scheduler_{i}"] = scheduler.state_dict()
-        return state_dict
+        return {f"scheduler_{i}": s.state_dict() for i, s in enumerate(self.schedulers)}
 
     def load_state_dict(self, state_dict):
-        for i, scheduler in enumerate(self.schedulers):
-            scheduler.load_state_dict(state_dict[f"scheduler_{i}"])
+        for i, s in enumerate(self.schedulers):
+            s.load_state_dict(state_dict[f"scheduler_{i}"])

@@ -1,0 +1,56 @@
+# Shared training constants for fineweb and slimpajama scripts.
+# Source this file: source "$(dirname "$0")/common_config.sh"
+#
+# Note: LRs are model-specific and defined in each training script.
+
+DEVICE="cuda:0"
+DATASETS_DIR=/data/users/arman/datasets
+ITERATIONS=128000
+WARMUP=3000
+EVAL_INTERVAL=500
+MAX_JOBS=1
+
+# Model architecture
+N_LAYER=12
+N_HEAD=12
+N_EMBD=768
+SEQ_LEN=512
+BATCH_SIZE=32
+ACC_STEPS=1
+
+# Training hyperparams
+WEIGHT_DECAY=0.1
+GRAD_CLIP=0.5
+MUON_NS_STEPS=6
+SCHEDULER=cos
+
+# Lion (betas only; LR is per-script)
+LION_BETA1=0.9
+LION_BETA2=0.99
+
+# Signum (momentum only; LR is per-script)
+SIGNUM_MOM=0.9
+
+# Muon (betas + momentum; LR is per-script)
+MUON_MOM=0.95
+MUON_BETA1=0.9
+MUON_BETA2=0.95
+
+# SignMuon (betas + momentum; LRs are per-script per-k)
+SM_MOM=0.95
+SM_BETA1=0.9
+SM_BETA2=0.95
+
+# LionMuon (betas only; LRs are per-script per-k)
+LM_BETA1=0.95
+LM_BETA2=0.99
+
+# AdamW backup lr for 1D params in hybrid optimizers
+MUON_ADAMW_LR=1e-3
+SM_ADAMW_LR=1e-3
+LM_ADAMW_LR=1e-3
+
+# Schedulers per optimizer family
+MUON_SCHEDULER=cos
+SM_SCHEDULER=cos
+LM_SCHEDULER=cos

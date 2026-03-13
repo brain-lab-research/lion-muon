@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -20,6 +21,7 @@ def get_dataset(args) -> Dict[str, np.ndarray]:
     contained in its own python file. The expected format at the moment is a dictionary of np.memmap
     containing two keys: 'train' and 'val', corresponding to the tokenized training and validation data.
     """
+    args.datasets_dir = os.path.expanduser(args.datasets_dir)
     if args.dataset == "wikitext":
         return get_wikitext_data(args.datasets_dir)
     if args.dataset == "shakespeare-char":
