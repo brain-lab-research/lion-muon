@@ -31,6 +31,7 @@ from optim.sign import Signum
 from optim.soap import SOAP
 from optim.shampoo import Shampoo
 from optim.shampoo_single import ShampooSingle
+from optim.rmsspectral import RMSspectral
 from optim.sophia import SophiaG
 
 
@@ -397,6 +398,18 @@ def main(args, parser):
             ),  # someone might try to change it later
             eps=1e-7,  # muon pytorch uses smaller eps
             adjust_lr_fn=None,  # to make the orthogonalized update have a consistent RMS across rectangular matrices
+        )
+    elif args.opt.startswith("rmsspectral-"):
+        variant = args.opt.split("-", 1)[1]
+        opt = RMSspectral(
+            group_specs,
+            lr=args.lr,
+            beta1=args.beta1,
+            beta2=args.beta2,
+            weight_decay=args.weight_decay,
+            ns_steps=args.muon_ns_steps,
+            variant=variant,
+            adamw_betas=(args.beta1, args.beta2),
         )
     else:
         opt = torch.optim.SGD(

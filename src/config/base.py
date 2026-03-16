@@ -108,6 +108,11 @@ def parse_args(base_parser, args, namespace):
             "scion-light",
             "d-muon",
             "muon-pytorch",  # works only with torch>=2.9
+            "rmsspectral-post",
+            "rmsspectral-pre",
+            "rmsspectral-post_orth",
+            "rmsspectral-split",
+            "rmsspectral-pre_ema",
         ],
     )
     parser.add_argument("--batch_size", default=50, type=int)
