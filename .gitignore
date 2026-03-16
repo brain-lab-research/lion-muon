@@ -3,6 +3,7 @@ src/data/datasets/
 wandb/
 exps/
 paper/
+exps_tuning_llama/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

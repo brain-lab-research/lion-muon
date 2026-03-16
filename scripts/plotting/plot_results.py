@@ -1,9 +1,11 @@
 """Plot results for optimizer comparison experiments.
 
 Usage:
-    python scripts/plotting/plot_results.py fineweb
-    python scripts/plotting/plot_results.py slimpajama
-    python scripts/plotting/plot_results.py all
+    python scripts/plotting/plot_results.py fineweb base
+    python scripts/plotting/plot_results.py fineweb llama
+    python scripts/plotting/plot_results.py slimpajama base
+    python scripts/plotting/plot_results.py slimpajama llama
+    python scripts/plotting/plot_results.py all base
 """
 
 import re
@@ -27,16 +29,16 @@ DATASETS = {
     'fineweb': {
         'wandb_project': 'sign-muon-main',
         'prefix': '',
-        'local_prefix': 'fw_',
         'title': 'FineWeb',
     },
     'slimpajama': {
         'wandb_project': 'sign-muon-slimpajama',
         'prefix': 'spj_',
-        'local_prefix': 'spj_',
         'title': 'SlimPajama',
     },
 }
+
+MODELS = {'base', 'llama'}
 
 # Display names: experiment key -> label
 # Conceptual families:
@@ -101,6 +103,30 @@ def parse_log(logfile):
                 iters.append(int(m.group(1)))
                 losses.append(float(m.group(2)))
     return iters, losses
+
+
+def _normalize_dataset_tag(name):
+    return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+
+
+def _dataset_prefix_candidates(dataset_name):
+    norm = _normalize_dataset_tag(dataset_name)
+    if norm == 'fineweb':
+        return ['fw', norm]
+    if norm == 'slimpajama':
+        return ['spj', norm]
+    # For unknown datasets, use normalized name directly.
+    return [norm]
+
+
+def get_local_prefix(dataset_name, model_name):
+    tag = _dataset_prefix_candidates(dataset_name)[0]
+    return f"{tag}_{model_name}_"
+
+
+def get_legacy_local_prefix(dataset_name):
+    tag = _dataset_prefix_candidates(dataset_name)[0]
+    return f"{tag}_"
 
 
 def get_local_runs(exps_dir, prefix):
@@ -209,20 +235,34 @@ def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns
     return iterations * model_flops_per_iter
 
 
-def plot_dataset(dataset_name):
-    ds = DATASETS[dataset_name]
-    runs = get_runs(ds['wandb_project'], ds['prefix'])
+def plot_dataset(dataset_name, model_name):
+    ds = DATASETS.get(dataset_name, {
+        'wandb_project': None,
+        'prefix': '',
+        'title': dataset_name,
+    })
+
+    runs = {}
+    if ds['wandb_project']:
+        runs = get_runs(ds['wandb_project'], ds['prefix'])
+
     if not runs:
         local_exps = os.path.join(LOCAL_BASE_DIR, 'exps')
-        runs = get_local_runs(local_exps, ds['local_prefix'])
+        auto_prefix = get_local_prefix(dataset_name, model_name)
+        runs = get_local_runs(local_exps, auto_prefix)
+        # Fallback for older naming patterns that used dataset-only prefix.
+        if not runs:
+            legacy_prefix = get_legacy_local_prefix(dataset_name)
+            runs = get_local_runs(local_exps, legacy_prefix)
     if not runs:
-        print(f"No runs found for {dataset_name}!")
+        print(f"No runs found for {dataset_name} ({model_name})!")
         return
 
     def bkey(key):
         return key.replace('_nonesterov', '')
 
-    print(f"\n{ds['title']} results (sorted by best val_loss):")
+    model_title = 'Base' if model_name == 'base' else 'Llama'
+    print(f"\n{ds['title']} ({model_title}) results (sorted by best val_loss):")
     print(f"  {'Optimizer':<30s} {'nesterov':>8s} {'best_loss':>10s} {'ppl':>8s} {'wall(min)':>10s}")
     print("  " + "-" * 70)
     for key, r in sorted(runs.items(), key=lambda x: x[1]['best_loss']):
@@ -231,7 +271,7 @@ def plot_dataset(dataset_name):
         wall_min = r['runtime'] / 60 if (r['runtime'] and r['runtime'] > 0) else 0
         print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}")
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(24, 7))
+    fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(16, 7))
 
     LEFT_LABELS = {'Muon (K=1)', 'LiMuon K=1'}
 
@@ -272,13 +312,13 @@ def plot_dataset(dataset_name):
     ax1.set_ylim(None, 5)
     ax1.set_xlabel('Iteration', fontsize=16)
     ax1.set_ylabel('Val Loss', fontsize=16)
-    ax1.set_title(f'Val Loss vs Iteration — 124M, {ds["title"]}', fontsize=16)
+    ax1.set_title(f'Val Loss vs Iteration — 124M, {ds["title"]} ({model_title})', fontsize=16)
     ax1.legend(fontsize=9, loc='upper right')
     ax1.grid(True, alpha=0.3, which='both')
     ax1.tick_params(labelsize=13)
 
-    # Plots 2 & 3: scatter
-    wall_data, flops_data = [], []
+    # Plot 2: FLOPs scatter
+    flops_data = []
     for nesterov_pass in [True, False]:
         for key in ORDER:
             rkey = key if nesterov_pass else key + '_nonesterov'
@@ -292,28 +332,16 @@ def plot_dataset(dataset_name):
             color = s.get('color', '#333')
             alpha = 1.0 if nesterov_pass else 0.45
             marker = s.get('marker', 'o') if nesterov_pass else 'x'
-            wall_min = r['runtime'] / 60 if (r['runtime'] and r['runtime'] > 0) else 0
             flops = compute_flops(n_layer, n_embd, seq_len, batch_size,
                                   r.get('iterations', 64000),
                                   r['opt'], K=r['K'], ns_steps=r['ns_steps'])
             ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
-            ax2.scatter(wall_min, r['best_loss'], s=180, zorder=5,
-                        color=color, marker=marker, alpha=alpha, **ec)
             ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
                         color=color, marker=marker, alpha=alpha, **ec)
-            wall_data.append((label, wall_min, r['best_loss'], nesterov_pass))
             flops_data.append((label, flops, r['best_loss'], nesterov_pass))
 
-    for label, x, y, nes in wall_data:
-        smart_annotate(ax2, label, x, y, nesterov=nes)
     for label, x, y, nes in flops_data:
         smart_annotate(ax3, label, x, y, nesterov=nes)
-
-    ax2.set_xlabel('Wall Time (min)', fontsize=16)
-    ax2.set_ylabel('Best Val Loss', fontsize=16)
-    ax2.set_title('Best Val Loss vs Wall Time', fontsize=16)
-    ax2.grid(True, alpha=0.3)
-    ax2.tick_params(labelsize=13)
 
     ax3.set_xlabel('Total Training FLOPs', fontsize=16)
     ax3.set_ylabel('Best Val Loss', fontsize=16)
@@ -329,26 +357,29 @@ def plot_dataset(dataset_name):
 
     plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 1, 1])
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    out_path = os.path.join(RESULTS_DIR, f'{dataset_name}_results.png')
+    out_path = os.path.join(RESULTS_DIR, f'{dataset_name}_{model_name}_results.png')
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Plot saved to {out_path}")
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <{'|'.join(DATASETS)}|all>")
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <dataset|all> <base|llama>")
         sys.exit(1)
 
     target = sys.argv[1]
+    model_name = sys.argv[2].lower()
+    if model_name not in MODELS:
+        print(f"Unknown model: {model_name}. Choose from: {', '.join(sorted(MODELS))}")
+        sys.exit(1)
+
     if target == 'all':
         for ds in DATASETS:
-            plot_dataset(ds)
-    elif target in DATASETS:
-        plot_dataset(target)
+            plot_dataset(ds, model_name)
     else:
-        print(f"Unknown dataset: {target}. Choose from: {', '.join(DATASETS)}, all")
-        sys.exit(1)
+        # Allow unknown datasets for local-only plotting via automatic prefix.
+        plot_dataset(target, model_name)
 
 
 if __name__ == '__main__':

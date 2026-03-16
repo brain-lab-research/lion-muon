@@ -1,0 +1,157 @@
+import argparse
+import json
+import re
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--exps-dir", default="exps_tuning_llama")
+    p.add_argument("--prefix", default="lionmuon_k2")
+    p.add_argument("--all-methods", action="store_true")
+    p.add_argument("--output", default="results/tuning_heatmap.png")
+    return p.parse_args()
+
+
+def load_points(exps_dir: Path, prefix: str):
+    pat = re.compile(rf"^{re.escape(prefix)}_lr([^_]+)_slr([^_]+)$")
+    points = []
+    for d in sorted(exps_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        m = pat.match(d.name)
+        if not m:
+            continue
+        summary_path = d / "summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            data = json.loads(summary_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        val_loss = data.get("val_loss", [])
+        if not val_loss:
+            continue
+        lr_s, slr_s = m.group(1), m.group(2)
+        points.append((lr_s, slr_s, min(val_loss)))
+    return points
+
+
+def sort_numeric_str(vals):
+    return sorted(vals, key=lambda s: float(s))
+
+
+def build_grid(points):
+    lrs = sort_numeric_str({p[0] for p in points})
+    slrs = sort_numeric_str({p[1] for p in points})
+    lr_to_i = {v: i for i, v in enumerate(lrs)}
+    slr_to_i = {v: i for i, v in enumerate(slrs)}
+
+    z = np.full((len(slrs), len(lrs)), np.nan)
+    for lr_s, slr_s, best in points:
+        z[slr_to_i[slr_s], lr_to_i[lr_s]] = best
+    return lrs, slrs, z
+
+
+def plot_single(points, out_path: Path):
+    lrs, slrs, z = build_grid(points)
+
+    fig, ax = plt.subplots(figsize=(6.2, 4.6))
+    im = ax.imshow(z, origin="lower", aspect="auto", cmap="RdYlGn_r")
+    ax.set_xticks(np.arange(len(lrs)))
+    ax.set_xticklabels(lrs, rotation=35, ha="right")
+    ax.set_yticks(np.arange(len(slrs)))
+    ax.set_yticklabels(slrs)
+    ax.set_xlabel("lr")
+    ax.set_ylabel("sign_lr")
+
+    cbar = fig.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label("best val_loss")
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=180)
+    print(f"Saved {out_path}")
+
+
+def plot_all_methods(exps_dir: Path, out_path: Path):
+    prefixes = [
+        "signmuon_k2", "signmuon_k5", "signmuon_k20", "signmuon_k100",
+        "lionmuon_k2", "lionmuon_k5", "lionmuon_k20", "lionmuon_k100",
+    ]
+    labels = {
+        "signmuon_k2": "SignMuon k=2",
+        "signmuon_k5": "SignMuon k=5",
+        "signmuon_k20": "SignMuon k=20",
+        "signmuon_k100": "SignMuon k=100",
+        "lionmuon_k2": "LiMuon k=2",
+        "lionmuon_k5": "LiMuon k=5",
+        "lionmuon_k20": "LiMuon k=20",
+        "lionmuon_k100": "LiMuon k=100",
+    }
+
+    data = {}
+    all_vals = []
+    for prefix in prefixes:
+        pts = load_points(exps_dir, prefix)
+        if not pts:
+            continue
+        lrs, slrs, z = build_grid(pts)
+        data[prefix] = (lrs, slrs, z)
+        all_vals.extend([v for v in z.ravel() if not np.isnan(v)])
+
+    if not data:
+        raise SystemExit(f"No matching runs found in {exps_dir} for SignMuon/LiMuon k grids")
+
+    vmin = float(np.min(all_vals))
+    vmax = float(np.max(all_vals))
+
+    fig, axes = plt.subplots(2, 4, figsize=(16, 7), sharey=False, constrained_layout=True)
+    im_for_cbar = None
+    for ax, prefix in zip(axes.ravel(), prefixes):
+        if prefix not in data:
+            ax.axis("off")
+            continue
+        lrs, slrs, z = data[prefix]
+        im = ax.imshow(z, origin="lower", aspect="auto", cmap="RdYlGn_r", vmin=vmin, vmax=vmax)
+        im_for_cbar = im
+        ax.set_xticks(np.arange(len(lrs)))
+        ax.set_xticklabels(lrs, rotation=35, ha="right", fontsize=8)
+        ax.set_yticks(np.arange(len(slrs)))
+        ax.set_yticklabels(slrs, fontsize=8)
+        ax.set_xlabel("lr", fontsize=9)
+        ax.set_ylabel("sign_lr", fontsize=9)
+        ax.set_title(labels[prefix], fontsize=10)
+
+    if im_for_cbar is not None:
+        cbar = fig.colorbar(im_for_cbar, ax=axes.ravel().tolist(), pad=0.01, shrink=0.92)
+        cbar.set_label("best val_loss")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=180)
+    print(f"Saved {out_path}")
+
+
+def main():
+    args = parse_args()
+    repo_root = Path(__file__).resolve().parents[2]
+    exps_dir = (repo_root / args.exps_dir).resolve()
+    out_path = (repo_root / args.output).resolve()
+
+    if args.all_methods:
+        plot_all_methods(exps_dir, out_path)
+        return
+
+    points = load_points(exps_dir, args.prefix)
+    if not points:
+        raise SystemExit(f"No matching runs found in {exps_dir} for prefix '{args.prefix}'")
+    plot_single(points, out_path)
+
+
+if __name__ == "__main__":
+    main()

@@ -51,7 +51,7 @@ class LionMuon(torch.optim.Optimizer):
         weight_decay=0.0,
         adamw_params=None,
         adamw_lr=3e-4,
-        adamw_betas=(0.9, 0.95),
+        adamw_betas=(0.8, 0.999),
         adamw_eps=1e-8,
         adamw_wd=0.1,
     ):
