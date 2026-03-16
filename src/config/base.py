@@ -143,6 +143,16 @@ def parse_args(base_parser, args, namespace):
     parser.add_argument("--sign_scaling", default="muon", type=str, choices=["muon", "frob", "none"])  # sign update scaling
     parser.add_argument("--adamuon_ns_steps", default=6, type=int)
     parser.add_argument("--adamuon_rms_factor", default=0.2, type=float)
+    parser.add_argument(
+        "--rmsspectral_variant",
+        default="post",
+        type=str,
+        choices=["post", "pre", "post_orth", "split", "pre_ema"],
+    )
+    parser.add_argument("--rmsspectral_eps", default=1e-8, type=float)
+    parser.add_argument("--rmsspectral_adamw_beta1", default=0.9, type=float)
+    parser.add_argument("--rmsspectral_adamw_beta2", default=0.95, type=float)
+    parser.add_argument("--rmsspectral_adamw_eps", default=1e-8, type=float)
     parser.add_argument("--taia_ns_steps", default=6, type=int)
     parser.add_argument("--taia_lr_factor", default=0.02, type=float)
     parser.add_argument("--taia_lmo", default="spectral", type=str)

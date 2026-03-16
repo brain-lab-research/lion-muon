@@ -1,176 +1,144 @@
-"""RMSSpectral optimizer (AdaMuon variant with symmetric RMS spectral preconditioning).
+"""
+RMSspectral: Four ways to combine spectral LMO (Muon-style) with Adam-style V_t.
 
-Generalization: use a power `p` for preconditioning instead of fixed 1/4.
-For each 2D parameter:
-    M_t = beta * M_{t-1} + G_t
-    sign_m = Sign(M_t)
-    V_t = beta * V_{t-1} + (1 - beta) * (sign_m ⊙ sign_m)
-    R_t = V_t**p + eps               (left preconditioning factor)
-    O_t = NS( sign_m / R_t )         (orthogonalization of left-preconditioned sign)
-    O_t *= spectral_scale            (same normalization as AdaMuon)
-    O_hat = O_t / R_t                (right preconditioning)
-    γ_t = 0.2 * sqrt(m*n) / ||O_hat||_F
-    W_{t+1} = W_t - lr * (γ_t * O_hat + weight_decay * W_t)
+Variants:
+  1) "post"       — LMO(M_t), then divide by sqrt(V̂_t).           (Clarifying Shampoo style)
+  2) "pre"        — LMO(M_t / sqrt(V̂_t)).                         (no paper, "шиза")
+  3) "post_orth"  — LMO(M_t), V_t from LMO(g_t)^2, divide.       (AdaMuon style)
+  4) "split"      — M_t/√(√V̂+ε) → LMO → /√(√V̂+ε)               (Preconditioned Norms / MuAdam)
+  5) "pre_ema"    — EMA(g_t / sqrt(V̂_t)) → LMO                  (normalize then average)
 
-Special cases:
-    p = 0.25  -> original RMSSpectral
-    p = 0.5   -> RMSSpectral-SANIA variant (stronger smoothing)
-Non-2D params fall back to internal AdamW style update.
+Only bc2 correction on V_t. No bc1 — NS normalizes spectral norm, so scalar on input is irrelevant.
+All variants use AdamW fallback for 1D parameters.
 """
 
-import os
+import math
 
 import torch
-import torch.distributed as dist
+
+from .muon import zeropower_via_newtonschulz5
 
 
-@torch.compile
-def zeropower_via_newtonschulz5(G, steps=6, eps=1e-7):
-    assert len(G.shape) == 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.to(dtype=torch.bfloat16)
-    X /= X.norm() + eps
-    transposed = G.size(0) > G.size(1)
-    if transposed:
-        X = X.T
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if transposed:
-        X = X.T
-    return X
+class RMSspectral(torch.optim.Optimizer):
 
-
-class RMSSpectral(torch.optim.Optimizer):
     def __init__(
         self,
-        params,
-        lr=3e-4,
-        momentum=0.95,
-        ns_steps=6,
+        param_groups,
+        lr=1e-3,
+        beta1=0.9,
+        beta2=0.95,
+        eps=1e-8,
         weight_decay=0.0,
-        adamw_lr=3e-4,
+        ns_steps=5,
+        variant="post",
         adamw_betas=(0.9, 0.95),
         adamw_eps=1e-8,
-        adamw_wd=0.0,
-        eps=1e-8,
-        rms_power=0.25,
     ):
+        assert variant in ("post", "pre", "post_orth", "split", "pre_ema"), (
+            f"Unknown variant: {variant}"
+        )
         defaults = dict(
             lr=lr,
-            momentum=momentum,
-            ns_steps=ns_steps,
+            beta1=beta1,
+            beta2=beta2,
+            eps=eps,
             weight_decay=weight_decay,
-            adamw_lr=adamw_lr,
-            adamw_lr_ratio=adamw_lr / lr if lr != 0 else 1.0,
+            ns_steps=ns_steps,
+            variant=variant,
             adamw_betas=adamw_betas,
             adamw_eps=adamw_eps,
-            adamw_wd=adamw_wd,
-            eps=eps,
-            rms_power=rms_power,
         )
-        param_list = list(params)
-        super().__init__(param_list, defaults)
+        super().__init__(param_groups, defaults)
+        for group in self.param_groups:
+            for p in group["params"]:
+                self.state[p]["use_spectral"] = p.ndim >= 2 and p.size(0) < 10000
 
-        for p in param_list:
-            if p.ndim == 2 and p.size(0) < 10000:
-                self.state[p]["use_adamuon"] = True
-            else:
-                self.state[p]["use_adamuon"] = False
-
-        if "WORLD_SIZE" in os.environ:
-            self.world_size = int(os.environ.get("WORLD_SIZE", 1))
-            self.rank = int(os.environ.get("RANK", 0))
-        else:
-            self.world_size = 1
-            self.rank = 0
-
+    @torch.no_grad()
     def step(self):
         for group in self.param_groups:
+
             lr = group["lr"]
-            beta = group["momentum"]
+            beta1 = group["beta1"]
+            beta2 = group["beta2"]
+            eps = group["eps"]
             ns_steps = group["ns_steps"]
             weight_decay = group["weight_decay"]
-            eps = group["eps"]
-            rms_power = group["rms_power"]
+            variant = group["variant"]
+            beta1_adamw, beta2_adamw = group["adamw_betas"]
+            eps_adamw = group["adamw_eps"]
 
-            adamuon_params = [p for p in group["params"] if self.state[p]["use_adamuon"]]
+            if "step" in group:
+                group["step"] += 1
+            else:
+                group["step"] = 1
+            step = group["step"]
 
-            total_params = sum(p.numel() for p in adamuon_params)
-            updates_flat = torch.zeros(total_params, device=adamuon_params[0].device if adamuon_params else "cpu", dtype=torch.bfloat16)
-            curr_idx = 0
-
-            for i, p in enumerate(adamuon_params):
-                if i % self.world_size == self.rank:
-                    g = p.grad
-                    if g is None:
-                        curr_idx += p.numel()
-                        continue
-                    g_view = g.view(g.size(0), -1) if g.ndim > 2 else g
-                    state = self.state[p]
-                    if "momentum_buffer" not in state:
-                        state["momentum_buffer"] = torch.zeros_like(g_view)
-                    if "rms_buffer" not in state:
-                        state["rms_buffer"] = torch.zeros_like(g_view)
-                    m_buf = state["momentum_buffer"]
-                    v_buf = state["rms_buffer"]
-                    m_buf.mul_(beta).add_(g_view)
-                    sign_m = m_buf.sign()
-                    # Update second moment with sign variance
-                    v_buf.mul_(beta).addcmul_(sign_m, sign_m, value=(1 - beta))
-                    rootp = v_buf.pow(rms_power) + eps  # (V**p + eps)
-                    pre_in = sign_m / rootp
-                    O = zeropower_via_newtonschulz5(pre_in, steps=ns_steps)
-                    O *= max(1, O.size(0) / O.size(1)) ** 0.5
-                    O_hat = O / rootp
-                    # frob = O_hat.norm() + eps
-                    # gamma = 0.2 * (p.shape[0] * p.shape[1]) ** 0.5 / frob
-                    # update = (gamma * O_hat).to(dtype=torch.bfloat16)
-                    update = O_hat.to(dtype=torch.bfloat16)
-                    updates_flat[curr_idx : curr_idx + p.numel()] = update.view(-1)[: p.numel()]
-                curr_idx += p.numel()
-
-            if self.world_size > 1 and total_params > 0:
-                dist.all_reduce(updates_flat, op=dist.ReduceOp.SUM)
-
-            curr_idx = 0
-            for p in adamuon_params:
+            for p in group["params"]:
                 if p.grad is None:
-                    curr_idx += p.numel()
                     continue
-                raw_update = updates_flat[curr_idx : curr_idx + p.numel()].view_as(p.data).to(p.data.dtype)
-                if weight_decay != 0:
-                    raw_update = raw_update + weight_decay * p.data
-                p.data.add_(raw_update, alpha=-lr)
-                curr_idx += p.numel()
 
-            # AdamW fallback for non-2D params
-            adamw_params = [p for p in group["params"] if not self.state[p]["use_adamuon"]]
-            if adamw_params:
-                aw_lr = group["adamw_lr_ratio"] * group["lr"]
-                beta1, beta2 = group["adamw_betas"]
-                aw_eps = group["adamw_eps"]
-                aw_wd = group["adamw_wd"]
-                for p in adamw_params:
-                    g = p.grad
-                    if g is None:
-                        continue
-                    state = self.state[p]
-                    if "step" not in state:
-                        state["step"] = 0
-                        state["moment1"] = torch.zeros_like(g)
-                        state["moment2"] = torch.zeros_like(g)
-                    state["step"] += 1
-                    step = state["step"]
-                    m1 = state["moment1"]
-                    m2 = state["moment2"]
-                    m1.lerp_(g, 1 - beta1)
-                    m2.lerp_(g.square(), 1 - beta2)
-                    g_hat = m1 / (aw_eps + m2.sqrt())
-                    bc1 = 1 - beta1**step
-                    bc2 = 1 - beta2**step
-                    scale = bc1 / bc2**0.5
-                    if aw_wd != 0:
-                        p.data.mul_(1 - aw_lr * aw_wd)
-                    p.data.add_(g_hat, alpha=-aw_lr / scale)
+                g = p.grad
+                state = self.state[p]
+
+                # ---- 1D params: AdamW fallback ----
+                if not state.get("use_spectral", False):
+                    if "adamw_m" not in state:
+                        state["adamw_m"] = torch.zeros_like(g)
+                        state["adamw_v"] = torch.zeros_like(g)
+                    am = state["adamw_m"]
+                    av = state["adamw_v"]
+                    am.lerp_(g, 1 - beta1_adamw)
+                    av.lerp_(g.square(), 1 - beta2_adamw)
+                    bc1 = 1 - beta1_adamw ** step
+                    bc2 = 1 - beta2_adamw ** step
+                    step_size = lr * math.sqrt(bc2) / bc1
+                    p.data.mul_(1 - lr * weight_decay)
+                    p.data.addcdiv_(am, av.sqrt().add_(eps_adamw), value=-step_size)
+                    continue
+
+                # ---- 2D params: spectral + adaptive ----
+                if "m" not in state:
+                    state["m"] = torch.zeros_like(g)
+                    state["v"] = torch.zeros_like(g)
+
+                m = state["m"]
+                v = state["v"]
+                if variant != "pre_ema":
+                    m.lerp_(g, 1 - beta1)
+
+                # Only bc2 for V_t. bc1 irrelevant — NS normalizes spectral norm.
+                bc2 = 1 - beta2 ** step
+
+                if variant == "post":
+                    v.lerp_(g.square(), 1 - beta2)
+                    o_t = zeropower_via_newtonschulz5(m.bfloat16(), steps=ns_steps).to(g.dtype)
+                    update = o_t / ((v / bc2).sqrt() + eps)
+
+                elif variant == "pre":
+                    v.lerp_(g.square(), 1 - beta2)
+                    n_t = m / ((v / bc2).sqrt() + eps)
+                    update = zeropower_via_newtonschulz5(n_t.bfloat16(), steps=ns_steps).to(g.dtype)
+
+                elif variant == "post_orth":
+                    o_t = zeropower_via_newtonschulz5(m.bfloat16(), steps=ns_steps).to(g.dtype)
+                    v.lerp_(o_t.square(), 1 - beta2)
+                    update = o_t / ((v / bc2).sqrt() + eps)
+
+                elif variant == "split":
+                    v.lerp_(g.square(), 1 - beta2)
+                    denom = ((v / bc2).sqrt() + eps).sqrt()
+                    n_t = m / denom
+                    n_prime = zeropower_via_newtonschulz5(n_t.bfloat16(), steps=ns_steps).to(g.dtype)
+                    update = n_prime / denom
+
+                elif variant == "pre_ema":
+                    v.lerp_(g.square(), 1 - beta2)
+                    n_t = g / ((v / bc2).sqrt() + eps)  # normalize grad first
+                    m.lerp_(n_t, 1 - beta1)             # then EMA of normalized
+                    update = zeropower_via_newtonschulz5(m.bfloat16(), steps=ns_steps).to(g.dtype)
+
+                # Rectangular matrix scaling (same as old Muon)
+                update *= max(1, p.size(0) / p.size(1)) ** 0.5
+
+                p.data.mul_(1 - lr * weight_decay)
+                p.data.add_(update, alpha=-lr)

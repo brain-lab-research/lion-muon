@@ -30,6 +30,7 @@ from optim.muon import CombinedScheduler, Muon
 from optim.sign_muon import SignMuon, SignMuonScheduler
 from optim.lion_muon import LionMuon, LionMuonScheduler
 from optim.prodigy import Prodigy
+from optim.rmsspectral import RMSspectral
 from optim.schedule import (cos_inf_schedule, cosine_wsd_decay_schedule,
                             dd_schedule, wsd_schedule)
 from optim.schedulefree import AdamWScheduleFree, SGDScheduleFree
@@ -173,7 +174,7 @@ def main(args, parser):
             weight_decay=args.weight_decay,
             adamw_params=None,
             adamw_lr=args.lr,
-            adamw_betas=(args.beta1, args.beta2),
+            adamw_betas=(0.8, 0.999),
             adamw_eps=1e-8,
             adamw_wd=args.weight_decay,
         )
@@ -195,7 +196,7 @@ def main(args, parser):
             weight_decay=args.weight_decay,
             adamw_params=None,
             adamw_lr=args.lr,
-            adamw_betas=(args.beta1, args.beta2),
+            adamw_betas=(0.8, 0.999),
             adamw_eps=1e-8,
             adamw_wd=args.weight_decay,
         )
@@ -222,7 +223,7 @@ def main(args, parser):
             weight_decay=args.weight_decay,
             adamw_params=None,
             adamw_lr=args.lr,
-            adamw_betas=(args.beta1, args.beta2),
+            adamw_betas=(0.8, 0.999),
             adamw_eps=1e-8,
             adamw_wd=args.weight_decay,
         )
@@ -245,7 +246,7 @@ def main(args, parser):
             rms_alignment_factor=args.adamuon_rms_factor,
             adamw_params=None,
             adamw_lr=args.lr,
-            adamw_betas=(args.beta1, args.beta2),
+            adamw_betas=(0.8, 0.999),
             adamw_eps=1e-8,
             adamw_wd=args.weight_decay,
         )
@@ -379,40 +380,31 @@ def main(args, parser):
             weight_decay=args.weight_decay,
         )
     elif args.opt == "rmsspectral":
-        param_list = (
-            list(model.parameters())
-            if args.distributed_backend is None
-            else list(model.module.parameters())
-        )
-        assert (
-            sum(p.numel() for p in param_list) == params_cnt
-        ), "number of parameters must be the same"
-        opt = AdaMuon(
+        opt = RMSspectral(
             group_specs,
             lr=args.lr,
-            momentum=args.momentum,
-            ns_steps=args.adamuon_ns_steps,
+            beta1=args.beta1,
+            beta2=args.beta2,
+            eps=args.rmsspectral_eps,
             weight_decay=args.weight_decay,
-            eps=1e-8,
-            mode='rmsspectral',
+            ns_steps=args.muon_ns_steps,
+            variant=args.rmsspectral_variant,
+            adamw_betas=(args.rmsspectral_adamw_beta1, args.rmsspectral_adamw_beta2),
+            adamw_eps=args.rmsspectral_adamw_eps,
         )
     elif args.opt == "rmsspectral-sania":
-        param_list = (
-            list(model.parameters())
-            if args.distributed_backend is None
-            else list(model.module.parameters())
-        )
-        assert (
-            sum(p.numel() for p in param_list) == params_cnt
-        ), "number of parameters must be the same"
-        opt = AdaMuon(
+        # Backward-compatible preset kept for old experiment scripts.
+        opt = RMSspectral(
             group_specs,
             lr=args.lr,
-            momentum=args.momentum,
-            ns_steps=args.adamuon_ns_steps,
-            weight_decay=args.weight_decay,
+            beta1=args.beta1,
+            beta2=args.beta2,
             eps=1e-5,
-            mode='rmsspectral-sania',
+            weight_decay=args.weight_decay,
+            ns_steps=args.muon_ns_steps,
+            variant="post",
+            adamw_betas=(args.rmsspectral_adamw_beta1, args.rmsspectral_adamw_beta2),
+            adamw_eps=args.rmsspectral_adamw_eps,
         )
     elif args.opt in [
         "clip-adagrad",
