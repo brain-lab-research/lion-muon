@@ -1,4 +1,4 @@
-DATASETS_DIR=/data/users/arman/datasets
+DATASETS_DIR=/home/shared/datasets/
 ITERATIONS=64000
 WARMUP=3000
 EVAL_INTERVAL=500
