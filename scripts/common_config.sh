@@ -1,4 +1,4 @@
-DATASETS_DIR=/home/shared/datasets/
+DATASETS_DIR=/data/datasets/
 ITERATIONS=64000
 WARMUP=3000
 EVAL_INTERVAL=500

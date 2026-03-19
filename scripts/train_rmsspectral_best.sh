@@ -7,14 +7,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-source "$SCRIPT_DIR/common_config.sh"
+source "$REPO_ROOT/scripts/common_config.sh"
 
 PYTHON=python
 
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") [GPU_ID] [--dataset fw|fineweb|spj|slimpajama] [--model base|gpt|llama] [--max-jobs N] [--results-dir DIR]
+  $(basename "$0") [GPU_ID] [--dataset fw|fineweb|spj|slimpajama] [--model base|gpt|llama] [--max-jobs N]
 
 Examples:
   $(basename "$0") 0 --dataset fw --model base
@@ -31,7 +31,6 @@ fi
 DATASET_RAW="fw"
 MODEL_RAW="base"
 MAX_JOBS_OVERRIDE=""
-RESULTS_DIR_OVERRIDE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,10 +44,6 @@ while [ $# -gt 0 ]; do
       ;;
     --max-jobs)
       MAX_JOBS_OVERRIDE="$2"
-      shift 2
-      ;;
-    --results-dir)
-      RESULTS_DIR_OVERRIDE="$2"
       shift 2
       ;;
     -h|--help)
@@ -82,7 +77,7 @@ esac
 case "$MODEL_RAW" in
   base|gpt)
     MODEL="base"
-    MODEL_PREFIX="gpt"
+    MODEL_PREFIX="base"
     ;;
   llama)
     MODEL="llama"
@@ -96,20 +91,36 @@ case "$MODEL_RAW" in
 esac
 
 DEVICE="cuda:${GPU_ID}"
-MAX_JOBS_LOCAL=${MAX_JOBS_OVERRIDE:-2}
 
-ITERATIONS=2000
-WARMUP=200
-EVAL_INTERVAL=100
+# Match baseline experiment settings (same family as signmuon/lionmuon runs).
+ITERATIONS=${ITERATIONS:-64000}
+WARMUP=${WARMUP:-3000}
+EVAL_INTERVAL=${EVAL_INTERVAL:-500}
+MAX_JOBS_LOCAL=${MAX_JOBS_OVERRIDE:-${MAX_JOBS:-1}}
 
-if [ -n "$RESULTS_DIR_OVERRIDE" ]; then
-  EXPS_DIR="$RESULTS_DIR_OVERRIDE"
-else
-  EXPS_DIR="./exps_tuning_rmsspectral_${DATASET_PREFIX}_${MODEL_PREFIX}"
+EXPS_DIR=./exps
+EXP_PREFIX="${DATASET_PREFIX}_${MODEL_PREFIX}_"
+
+# AdamW settings from train_baselines.sh
+ADAMW_LR=5e-4
+ADAMW_BETA1=0.8
+ADAMW_BETA2=0.999
+
+# Best tuned LR per RMSspectral variant from exps_tuning_rmsspectral_fw_gpt
+RMS_PRE_LR=2e-2
+RMS_PRE_EMA_LR=2e-2
+RMS_POST_ORTH_LR=5e-4
+RMS_SPLIT_LR=1e-4
+RMS_BETA1=${RMS_BETA1:-0.9}
+RMS_BETA2=${RMS_BETA2:-0.95}
+
+DATASET_DIR_ARG=""
+if [ "$DATASET" != "fineweb" ]; then
+  DATASET_DIR_ARG="--datasets_dir $DATASETS_DIR"
 fi
 
 COMMON_ARGS="--dataset $DATASET \
-  --datasets_dir $DATASETS_DIR \
+  $DATASET_DIR_ARG \
   --model $MODEL \
   --batch_size $BATCH_SIZE \
   --acc_steps $ACC_STEPS \
@@ -122,11 +133,11 @@ COMMON_ARGS="--dataset $DATASET \
   --device $DEVICE \
   --scheduler $SCHEDULER \
   --warmup_steps $WARMUP \
+  --weight_decay $WEIGHT_DECAY \
   --grad_clip $GRAD_CLIP \
+  --muon_ns_steps $MUON_NS_STEPS \
   --results_base_folder $EXPS_DIR \
   --tensorboard"
-
-RMS_SHARED="--opt rmsspectral --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
 
 PIDS=()
 
@@ -150,8 +161,9 @@ reap() {
 
 run() {
   local name=$1; shift
-  if [ -f "${EXPS_DIR}/${name}/summary.json" ]; then
-    echo "[SKIP] $name"
+  local exp_name="${EXP_PREFIX}${name}"
+  if [ -f "${EXPS_DIR}/${exp_name}/summary.json" ]; then
+    echo "[SKIP] $exp_name"
     return
   fi
   reap
@@ -159,44 +171,30 @@ run() {
     sleep 1
     reap
   done
-  echo "[RUN]  $name"
+  echo "[RUN]  $exp_name"
   OMP_NUM_THREADS=1 $PYTHON ./src/main.py $COMMON_ARGS \
-    --experiment_name "$name" "$@" &
+    --experiment_name "$exp_name" "$@" &
   PIDS+=($!)
 }
 
-# Tune selected RMSspectral methods from rmsspectral.py docs.
-RMS_VARIANTS="pre post_orth split pre_ema"
-RMS_BETA1=${RMS_BETA1:-0.9}
-RMS_BETA2=${RMS_BETA2:-0.95}
+# run "adamw" \
+#   --opt adamw --lr $ADAMW_LR --beta1 $ADAMW_BETA1 --beta2 $ADAMW_BETA2
 
-for VARIANT in $RMS_VARIANTS; do
-  case "$VARIANT" in
-    pre)
-      LRS="5e-4 1e-3 2e-3 3e-3 5e-3 7e-3 1e-2 1.5e-2 2e-2 3e-2"
-      ;;
-    post_orth)
-      LRS="1e-4 2e-4 3e-4 4e-4 5e-4 7e-4 1e-3 2e-3 3e-3 5e-3"
-      ;;
-    split)
-      LRS="2e-5 5e-5 1e-4 2e-4 3e-4 5e-4 1e-3 2e-3 3e-3 5e-3"
-      ;;
-    pre_ema)
-      LRS="1e-4 3e-4 5e-4 1e-3 2e-3 3e-3 5e-3 7e-3 1e-2 2e-2"
-      ;;
-    *)
-      echo "Unknown variant: $VARIANT"
-      exit 1
-      ;;
-  esac
+run "rmsspectral_pre" \
+  --opt rmsspectral --lr $RMS_PRE_LR --beta1 $RMS_BETA1 --beta2 $RMS_BETA2 \
+  --rmsspectral_variant pre
 
-  for LR in $LRS; do
-    run "rmsspectral_${VARIANT}_lr${LR}" \
-      --lr $LR --beta1 $RMS_BETA1 --beta2 $RMS_BETA2 \
-      --rmsspectral_variant $VARIANT \
-      $RMS_SHARED
-  done
-done
+run "rmsspectral_pre_ema" \
+  --opt rmsspectral --lr $RMS_PRE_EMA_LR --beta1 $RMS_BETA1 --beta2 $RMS_BETA2 \
+  --rmsspectral_variant pre_ema
+
+run "rmsspectral_post_orth" \
+  --opt rmsspectral --lr $RMS_POST_ORTH_LR --beta1 $RMS_BETA1 --beta2 $RMS_BETA2 \
+  --rmsspectral_variant post_orth
+
+run "rmsspectral_split" \
+  --opt rmsspectral --lr $RMS_SPLIT_LR --beta1 $RMS_BETA1 --beta2 $RMS_BETA2 \
+  --rmsspectral_variant split
 
 echo "Waiting for remaining jobs..."
 wait

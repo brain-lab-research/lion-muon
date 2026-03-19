@@ -126,7 +126,7 @@ class RMSspectral(torch.optim.Optimizer):
 
                 elif variant == "split":
                     v.lerp_(g.square(), 1 - beta2)
-                    denom = ((v / bc2).sqrt() + eps).sqrt()
+                    denom = (v / bc2 + eps).sqrt().sqrt()
                     n_t = m / denom
                     n_prime = zeropower_via_newtonschulz5(n_t.bfloat16(), steps=ns_steps).to(g.dtype)
                     update = n_prime / denom
