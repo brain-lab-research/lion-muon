@@ -185,7 +185,6 @@ def make_plot(runs: List[RunData], out_path: str, title_prefix: str) -> None:
 
     ax.set_xlabel("Iteration", fontsize=13)
     ax.set_ylabel("Validation loss", fontsize=13)
-    ax.set_title(f"{title_prefix}: RMSspectral vs AdamW/Muon/Lion", fontsize=14)
     ax.set_yscale("log")
     ax.set_ylim(3.5, 6)
     ax.grid(True, alpha=0.25)
@@ -194,7 +193,7 @@ def make_plot(runs: List[RunData], out_path: str, title_prefix: str) -> None:
 
     fig.tight_layout()
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    plt.savefig(out_path, dpi=170)
+    plt.savefig(out_path, dpi=300)
     plt.close(fig)
 
     print(f"Saved plot: {out_path}")

@@ -5,7 +5,7 @@ Variants:
   1) "post"       — LMO(M_t), then divide by sqrt(V̂_t).           (Clarifying Shampoo style)
   2) "pre"        — LMO(M_t / sqrt(V̂_t)).                         (no paper, "шиза")
   3) "post_orth"  — LMO(M_t), V_t from LMO(g_t)^2, divide.       (AdaMuon style)
-  4) "split"      — M_t/√(√V̂+ε) → LMO → /√(√V̂+ε)               (Preconditioned Norms / MuAdam)
+  4) "split"      — M_t/√(√V̂+ε) → LMO → /√(√V̂+ε)                (Preconditioned Norms / RMSspectral)
   5) "pre_ema"    — EMA(g_t / sqrt(V̂_t)) → LMO                  (normalize then average)
 
 Only bc2 correction on V_t. No bc1 — NS normalizes spectral norm, so scalar on input is irrelevant.
