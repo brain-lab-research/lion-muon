@@ -29,6 +29,8 @@ from optim.mars import MARS
 from optim.muon import CombinedScheduler, Muon
 from optim.sign_muon import SignMuon, SignMuonScheduler
 from optim.lion_muon import LionMuon, LionMuonScheduler
+from optim.signdmuon import SignDMuon, SignDMuonScheduler
+from optim.lidmuon import LiDMuon, LiDMuonScheduler
 from optim.prodigy import Prodigy
 from optim.rmsspectral import RMSspectral
 from optim.schedule import (cos_inf_schedule, cosine_wsd_decay_schedule,
@@ -220,6 +222,55 @@ def main(args, parser):
             cheap_mode=args.cheap_mode,
             cheap_ns_steps=args.cheap_ns_steps,
             sign_scaling=args.sign_scaling,
+            weight_decay=args.weight_decay,
+            adamw_params=None,
+            adamw_lr=args.lr,
+            adamw_betas=(0.8, 0.999),
+            adamw_eps=1e-8,
+            adamw_wd=args.weight_decay,
+        )
+    elif args.opt == "signdmuon":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert (
+            sum(p.numel() for p in param_list) == params_cnt
+        ), "number of parameters must be the same"
+        opt = SignDMuon(
+            muon_params=param_list,
+            lr=args.muon_lr_factor,
+            cheap_lr=args.sign_lr,
+            momentum=args.momentum,
+            nesterov=args.nesterov,
+            ns_steps=args.muon_ns_steps,
+            muon_every_k=args.muon_every_k,
+            cheap_mode=args.cheap_mode,
+            cheap_ns_steps=args.cheap_ns_steps,
+            sign_scaling=args.sign_scaling,
+            weight_decay=args.weight_decay,
+            adamw_params=None,
+            adamw_lr=args.lr,
+            adamw_betas=(0.8, 0.999),
+            adamw_eps=1e-8,
+            adamw_wd=args.weight_decay,
+        )
+    elif args.opt == "lidmuon":
+        param_list = (
+            list(model.parameters())
+            if args.distributed_backend is None
+            else list(model.module.parameters())
+        )
+        assert sum(p.numel() for p in param_list) == params_cnt
+        opt = LiDMuon(
+            muon_params=param_list,
+            lr=args.muon_lr_factor,
+            lion_lr=args.sign_lr,
+            beta1=args.beta1,
+            beta2=args.beta2,
+            ns_steps=args.muon_ns_steps,
+            muon_every_k=args.muon_every_k,
             weight_decay=args.weight_decay,
             adamw_params=None,
             adamw_lr=args.lr,
@@ -491,7 +542,7 @@ def main(args, parser):
         ), "Warmup steps must be < iterations."  # from schedules-and-scaling
         if args.scheduler in ["cos", "linear"]:
             # Warmup + CosineAnnealingLR (decays to 0)
-            if args.opt not in ("muon", "sign_muon", "lion_muon"):
+            if args.opt not in ("muon", "sign_muon", "lion_muon", "signdmuon", "lidmuon"):
                 warmup_sched = torch.optim.lr_scheduler.LinearLR(
                     opt, start_factor=1e-2, total_iters=args.warmup_steps
                 )
@@ -502,7 +553,12 @@ def main(args, parser):
                     opt, [warmup_sched, cosine_sched], milestones=[args.warmup_steps]
                 )
             else:
-                scheduler = (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
+                scheduler = (
+                    LiDMuonScheduler(opt, args) if args.opt == "lidmuon" else
+                    (SignDMuonScheduler(opt, args) if args.opt == "signdmuon" else
+                    (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else
+                    (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args))))
+                )
         elif args.scheduler == "cos_inf":
             lambda_schedule = cos_inf_schedule(
                 n_iterations=args.iterations,
@@ -513,8 +569,13 @@ def main(args, parser):
             )
             scheduler = (
                 torch.optim.lr_scheduler.LambdaLR(opt, lambda_schedule)
-                if args.opt not in ("muon", "sign_muon", "lion_muon")
-                else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
+                if args.opt not in ("muon", "sign_muon", "lion_muon", "signdmuon", "lidmuon")
+                else (
+                    LiDMuonScheduler(opt, args) if args.opt == "lidmuon" else
+                    (SignDMuonScheduler(opt, args) if args.opt == "signdmuon" else
+                    (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else
+                    (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args))))
+                )
             )
         elif args.scheduler == "wsd":
             lambda_schedule = wsd_schedule(
@@ -527,8 +588,13 @@ def main(args, parser):
             )
             scheduler = (
                 torch.optim.lr_scheduler.LambdaLR(opt, lambda_schedule)
-                if args.opt not in ("muon", "sign_muon", "lion_muon")
-                else (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args)))
+                if args.opt not in ("muon", "sign_muon", "lion_muon", "signdmuon", "lidmuon")
+                else (
+                    LiDMuonScheduler(opt, args) if args.opt == "lidmuon" else
+                    (SignDMuonScheduler(opt, args) if args.opt == "signdmuon" else
+                    (LionMuonScheduler(opt, args) if args.opt == "lion_muon" else
+                    (SignMuonScheduler(opt, args) if args.opt == "sign_muon" else CombinedScheduler(opt, args))))
+                )
             )
         elif args.scheduler == "cos_wsd":
             lambda_schedule = cosine_wsd_decay_schedule(

@@ -86,6 +86,8 @@ def parse_args(base_parser, args, namespace):
             "muon",
             "sign_muon",
             "lion_muon",
+            "signdmuon",
+            "lidmuon",
             "adamuon",
             "rmsspectral",
             "rmsspectral-sania",
@@ -192,7 +194,7 @@ def parse_args(base_parser, args, namespace):
     parser.add_argument("--lamb_use_bias_correction", default=False, type=bool)
 
     # Dataset params
-    parser.add_argument("--datasets_dir", type=str, default="~/../../datasets/")
+    parser.add_argument("--datasets_dir", type=str, default="~/datasets/")
     parser.add_argument(
         "--dataset",
         default="slimpajama",

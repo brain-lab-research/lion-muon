@@ -6,6 +6,7 @@ Usage:
     python scripts/plotting/plot_results.py slimpajama base
     python scripts/plotting/plot_results.py slimpajama llama
     python scripts/plotting/plot_results.py all base
+    python scripts/plotting/plot_results.py
 """
 
 import re
@@ -14,11 +15,13 @@ import sys
 import glob
 import json
 import math
+from collections import defaultdict
 import yaml
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from tensorboard.backend.event_processing import event_accumulator
 
 BASE_DIR = '/home/arman/llm-baselines'
 LOCAL_BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '')
@@ -35,6 +38,11 @@ DATASETS = {
         'wandb_project': 'sign-muon-slimpajama',
         'prefix': 'spj_',
         'title': 'SlimPajama',
+    },
+    'wikitext': {
+        'wandb_project': None,
+        'prefix': 'wt_',
+        'title': 'WikiText-103',
     },
 }
 
@@ -92,7 +100,6 @@ ORDER = [
     'lion', 'lionmuon_k100', 'lionmuon_k20', 'lionmuon_k5', 'lionmuon_k2', 'lionmuon_k1',
 ]
 
-
 def parse_log(logfile):
     pat = re.compile(r'>Eval: Iter=(\d+).*?val_loss=([\d.]+)')
     iters, losses = [], []
@@ -115,6 +122,8 @@ def _dataset_prefix_candidates(dataset_name):
         return ['fw', norm]
     if norm == 'slimpajama':
         return ['spj', norm]
+    if norm == 'wikitext':
+        return ['wt', norm]
     # For unknown datasets, use normalized name directly.
     return [norm]
 
@@ -129,7 +138,7 @@ def get_legacy_local_prefix(dataset_name):
     return f"{tag}_"
 
 
-def get_local_runs(exps_dir, prefix):
+def get_local_runs(exps_dir, prefix, model_name=None):
     """Load runs from local exps/ folder (summary.json files)."""
     runs = {}
     for summary_path in sorted(glob.glob(os.path.join(exps_dir, '*/summary.json'))):
@@ -141,6 +150,8 @@ def get_local_runs(exps_dir, prefix):
             continue  # still running / mid-write
         val_loss = d.get('val_loss', [])
         args = d.get('args', {})
+        if model_name and args.get('model') and args.get('model') != model_name:
+            continue
         if not val_loss:
             continue
         eval_interval = args.get('eval_interval', 500)
@@ -212,6 +223,11 @@ def get_runs(wandb_project, prefix):
     return runs
 
 
+def _is_excluded_run_key(key):
+    base = key.replace('_nonesterov', '')
+    return 'dmuon' in base
+
+
 def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns_steps=6,
                   vocab_size=50304):
     params_per_layer = 4 * n_embd**2 + 8 * n_embd**2
@@ -221,18 +237,37 @@ def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns
 
     d = n_embd
     ns_flops_per_layer = 0
+    matvec_mn_sum_per_layer = 0
     for (m, n) in [(d, 3*d), (d, d), (d, 4*d), (4*d, d)]:
         dmin, dmax = min(m, n), max(m, n)
         ns_flops_per_layer += ns_steps * 2 * dmin**2 * (2*dmax + dmin)
+        matvec_mn_sum_per_layer += m * n
     ns_flops_per_iter = n_layer * ns_flops_per_layer
+    sign_flops_per_iter = n_layer * matvec_mn_sum_per_layer
 
     if opt in ('adamw', 'lion'):
         return iterations * model_flops_per_iter
-    elif opt in ('muon', 'sign_muon', 'lion_muon'):
+    elif opt in ('muon', 'sign_muon', 'lion_muon') or str(opt).endswith('dmuon'):
         if K <= 1:
             return iterations * (model_flops_per_iter + ns_flops_per_iter)
         return iterations * (model_flops_per_iter + ns_flops_per_iter / K)
     return iterations * model_flops_per_iter
+
+
+def _base_key(key):
+    return key.replace('_nonesterov', '')
+
+
+def _iter_plot_runs(runs, ordered_keys):
+    for nesterov_pass in (True, False):
+        for key in ordered_keys:
+            rkey = key if nesterov_pass else key + '_nonesterov'
+            r = runs.get(rkey)
+            if not r or r.get('nesterov', True) != nesterov_pass:
+                continue
+            label = NAMES.get(_base_key(rkey), rkey)
+            style = STYLE.get(label, {})
+            yield rkey, r, label, style, nesterov_pass
 
 
 def plot_dataset(dataset_name, model_name):
@@ -249,24 +284,25 @@ def plot_dataset(dataset_name, model_name):
     if not runs:
         local_exps = os.path.join(LOCAL_BASE_DIR, 'exps')
         auto_prefix = get_local_prefix(dataset_name, model_name)
-        runs = get_local_runs(local_exps, auto_prefix)
+        runs = get_local_runs(local_exps, auto_prefix, model_name=model_name)
         # Fallback for older naming patterns that used dataset-only prefix.
         if not runs:
             legacy_prefix = get_legacy_local_prefix(dataset_name)
-            runs = get_local_runs(local_exps, legacy_prefix)
+            runs = get_local_runs(local_exps, legacy_prefix, model_name=model_name)
     if not runs:
         print(f"No runs found for {dataset_name} ({model_name})!")
         return
 
-    def bkey(key):
-        return key.replace('_nonesterov', '')
+    runs = {k: v for k, v in runs.items() if not _is_excluded_run_key(k)}
+
+    dynamic_order = ORDER
 
     model_title = 'Base' if model_name == 'base' else 'Llama'
     print(f"\n{ds['title']} ({model_title}) results (sorted by best val_loss):")
     print(f"  {'Optimizer':<30s} {'nesterov':>8s} {'best_loss':>10s} {'ppl':>8s} {'wall(min)':>10s}")
     print("  " + "-" * 70)
     for key, r in sorted(runs.items(), key=lambda x: x[1]['best_loss']):
-        label = NAMES.get(bkey(key), key)
+        label = NAMES.get(_base_key(key), key)
         nes_str = 'yes' if r.get('nesterov', True) else 'no'
         wall_min = r['runtime'] / 60 if (r['runtime'] and r['runtime'] > 0) else 0
         print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}")
@@ -286,30 +322,18 @@ def plot_dataset(dataset_name, model_name):
 
     n_layer, n_embd, seq_len, batch_size = 12, 768, 512, 32
 
-    # Plot both nesterov and non-nesterov variants together
-    # Iterate ORDER twice: first nesterov (solid), then non-nesterov (faded/dashed)
-    for nesterov_pass in [True, False]:
-        for key in ORDER:
-            rkey = key if nesterov_pass else key + '_nonesterov'
-            if rkey not in runs:
-                continue
-            r = runs[rkey]
-            if r.get('nesterov', True) != nesterov_pass:
-                continue
-            label = NAMES.get(bkey(rkey), rkey)
-            s = STYLE.get(label, {})
-            color = s.get('color', '#333')
-            alpha = 1.0 if nesterov_pass else 0.45
-            lw = s.get('lw', 2) if nesterov_pass else s.get('lw', 2) * 0.8
-            ls = s.get('ls', '-') if nesterov_pass else (0, (3, 2))
-            legend_label = f"{label} ({r['best_loss']:.3f})" if nesterov_pass else f"{label}* no-Nes ({r['best_loss']:.3f})"
-
-            # Plot 1: val loss curve
-            ax1.plot(r['iters'], r['losses'], label=legend_label,
-                     color=color, ls=ls, lw=lw, alpha=alpha)
+    for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, dynamic_order):
+        color = s.get('color', '#333')
+        alpha = 1.0 if nesterov_pass else 0.45
+        lw = s.get('lw', 2) if nesterov_pass else s.get('lw', 2) * 0.8
+        ls = s.get('ls', '-') if nesterov_pass else (0, (3, 2))
+        legend_label = f"{label} ({r['best_loss']:.3f})" if nesterov_pass else f"{label}* no-Nes ({r['best_loss']:.3f})"
+        ax1.plot(r['iters'], r['losses'], label=legend_label,
+                 color=color, ls=ls, lw=lw, alpha=alpha)
 
     ax1.set_yscale('log')
-    ax1.set_ylim(None, 5)
+    y_max = 4 if dataset_name == 'wikitext' else 5
+    ax1.set_ylim(None, y_max)
     ax1.set_xlabel('Iteration', fontsize=16)
     ax1.set_ylabel('Val Loss', fontsize=16)
     ax1.set_title(f'Val Loss vs Iteration — 124M, {ds["title"]} ({model_title})', fontsize=16)
@@ -319,26 +343,17 @@ def plot_dataset(dataset_name, model_name):
 
     # Plot 2: FLOPs scatter
     flops_data = []
-    for nesterov_pass in [True, False]:
-        for key in ORDER:
-            rkey = key if nesterov_pass else key + '_nonesterov'
-            if rkey not in runs:
-                continue
-            r = runs[rkey]
-            if r.get('nesterov', True) != nesterov_pass:
-                continue
-            label = NAMES.get(bkey(rkey), rkey)
-            s = STYLE.get(label, {})
-            color = s.get('color', '#333')
-            alpha = 1.0 if nesterov_pass else 0.45
-            marker = s.get('marker', 'o') if nesterov_pass else 'x'
-            flops = compute_flops(n_layer, n_embd, seq_len, batch_size,
-                                  r.get('iterations', 64000),
-                                  r['opt'], K=r['K'], ns_steps=r['ns_steps'])
-            ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
-            ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
-                        color=color, marker=marker, alpha=alpha, **ec)
-            flops_data.append((label, flops, r['best_loss'], nesterov_pass))
+    for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, dynamic_order):
+        color = s.get('color', '#333')
+        alpha = 1.0 if nesterov_pass else 0.45
+        marker = s.get('marker', 'o') if nesterov_pass else 'x'
+        flops = compute_flops(n_layer, n_embd, seq_len, batch_size,
+                              r.get('iterations', 64000),
+                              r['opt'], K=r['K'], ns_steps=r['ns_steps'])
+        ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
+        ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
+                    color=color, marker=marker, alpha=alpha, **ec)
+        flops_data.append((label, flops, r['best_loss'], nesterov_pass))
 
     for label, x, y, nes in flops_data:
         smart_annotate(ax3, label, x, y, nesterov=nes)
@@ -363,9 +378,45 @@ def plot_dataset(dataset_name, model_name):
     print(f"Plot saved to {out_path}")
 
 
+def discover_available_dataset_model_pairs():
+    """Discover (dataset, model) pairs from local summary files in exps/."""
+    local_exps = os.path.join(LOCAL_BASE_DIR, 'exps')
+    if not os.path.isdir(local_exps):
+        return []
+
+    pairs = set()
+    for summary_path in glob.glob(os.path.join(local_exps, '*/summary.json')):
+        try:
+            with open(summary_path) as f:
+                d = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        args = d.get('args', {}) or {}
+        dataset = args.get('dataset')
+        model = args.get('model')
+
+        if dataset in DATASETS and model in MODELS:
+            pairs.add((dataset, model))
+
+    return sorted(pairs)
+
+
 def main():
+    if len(sys.argv) == 1:
+        pairs = discover_available_dataset_model_pairs()
+        if not pairs:
+            print("No local results found in exps/ to plot.")
+            sys.exit(0)
+        print("Auto-discovered result groups:")
+        for ds, model_name in pairs:
+            print(f"  - {ds} {model_name}")
+            plot_dataset(ds, model_name)
+        return
+
     if len(sys.argv) < 3:
         print(f"Usage: {sys.argv[0]} <dataset|all> <base|llama>")
+        print(f"   or: {sys.argv[0]}   # auto-plot all available local results")
         sys.exit(1)
 
     target = sys.argv[1]

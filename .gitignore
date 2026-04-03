@@ -1,7 +1,6 @@
 # Dataset folder
 src/data/datasets/
 wandb/
-exps/
 paper/
 exps_tuning_llama/
 
@@ -76,7 +75,7 @@ instance/
 .scrapy
 
 # Sphinx documentation
-docs/_build/
+docs/
 
 # PyBuilder
 target/

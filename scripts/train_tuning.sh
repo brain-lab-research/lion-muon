@@ -12,15 +12,15 @@ source "$SCRIPT_DIR/common_config.sh"
 PYTHON=/data/users/arman/miniconda3/envs/optim/bin/python
 
 usage() {
-  cat <<EOF
+  cat <<USAGE
 Usage:
-  $(basename "$0") [GPU_ID] [--dataset fw|fineweb|spj|slimpajama] [--model base|gpt|llama] [--max-jobs N] [--results-dir DIR]
+  $(basename "$0") [GPU_ID] [--dataset fw|fineweb|spj|slimpajama|wt|wikitext] [--model base|gpt|llama] [--max-jobs N] [--results-dir DIR] [--algo-set regular|all]
 
 Examples:
   $(basename "$0") 0 --dataset fw --model base
   $(basename "$0") 0 --dataset fw --model llama
   $(basename "$0") --dataset spj --model llama --max-jobs 2
-EOF
+USAGE
 }
 
 GPU_ID="0"
@@ -33,29 +33,22 @@ DATASET_RAW="fw"
 MODEL_RAW="base"
 MAX_JOBS_OVERRIDE=""
 RESULTS_DIR_OVERRIDE=""
+ALGO_SET="regular"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dataset)
-      DATASET_RAW="$2"
-      shift 2
-      ;;
+      DATASET_RAW="$2"; shift 2 ;;
     --model)
-      MODEL_RAW="$2"
-      shift 2
-      ;;
+      MODEL_RAW="$2"; shift 2 ;;
     --max-jobs)
-      MAX_JOBS_OVERRIDE="$2"
-      shift 2
-      ;;
+      MAX_JOBS_OVERRIDE="$2"; shift 2 ;;
     --results-dir)
-      RESULTS_DIR_OVERRIDE="$2"
-      shift 2
-      ;;
+      RESULTS_DIR_OVERRIDE="$2"; shift 2 ;;
+    --algo-set)
+      ALGO_SET="$2"; shift 2 ;;
     -h|--help)
-      usage
-      exit 0
-      ;;
+      usage; exit 0 ;;
     *)
       echo "Unknown argument: $1"
       usage
@@ -66,13 +59,11 @@ done
 
 case "$DATASET_RAW" in
   fw|fineweb)
-    DATASET="fineweb"
-    DATASET_PREFIX="fw"
-    ;;
+    DATASET="fineweb"; DATASET_PREFIX="fw" ;;
   spj|slimpajama)
-    DATASET="slimpajama"
-    DATASET_PREFIX="spj"
-    ;;
+    DATASET="slimpajama"; DATASET_PREFIX="spj" ;;
+  wt|wikitext|wikitext103|wikitext-103)
+    DATASET="wikitext"; DATASET_PREFIX="wt" ;;
   *)
     echo "Unsupported dataset: $DATASET_RAW"
     usage
@@ -82,15 +73,25 @@ esac
 
 case "$MODEL_RAW" in
   base|gpt)
-    MODEL="base"
-    MODEL_PREFIX="gpt"
-    ;;
+    MODEL="base"; MODEL_PREFIX="gpt" ;;
   llama)
-    MODEL="llama"
-    MODEL_PREFIX="llama"
-    ;;
+    MODEL="llama"; MODEL_PREFIX="llama" ;;
   *)
     echo "Unsupported model: $MODEL_RAW"
+    usage
+    exit 1
+    ;;
+esac
+
+RUN_REGULAR=0
+case "$ALGO_SET" in
+  regular)
+    RUN_REGULAR=1 ;;
+  all)
+    RUN_REGULAR=1
+    ;;
+  *)
+    echo "Unsupported algo-set: $ALGO_SET (supported: regular, all)"
     usage
     exit 1
     ;;
@@ -100,15 +101,10 @@ DEVICE="cuda:${GPU_ID}"
 MAX_JOBS_LOCAL=${MAX_JOBS_OVERRIDE:-2}
 SM_LR=${SM_LR:-1e-3}
 
-if [ "$MODEL" = "base" ]; then
-  ITERATIONS=2000
-  WARMUP=200
-  EVAL_INTERVAL=100
-else
-  ITERATIONS=3000
-  WARMUP=300
-  EVAL_INTERVAL=500
-fi
+# Tuning is standardized to the completed llama schedule.
+ITERATIONS=3000
+WARMUP=300
+EVAL_INTERVAL=500
 
 if [ -n "$RESULTS_DIR_OVERRIDE" ]; then
   EXPS_DIR="$RESULTS_DIR_OVERRIDE"
@@ -120,8 +116,13 @@ else
   EXPS_DIR="./exps_tuning_${DATASET_PREFIX}_${MODEL_PREFIX}"
 fi
 
+DATASET_DIR_ARG=""
+if [ "$DATASET" != "fineweb" ]; then
+  DATASET_DIR_ARG="--datasets_dir $DATASETS_DIR"
+fi
+
 COMMON_ARGS="--dataset $DATASET \
-  --datasets_dir $DATASETS_DIR \
+  $DATASET_DIR_ARG \
   --model $MODEL \
   --batch_size $BATCH_SIZE \
   --acc_steps $ACC_STEPS \
@@ -138,14 +139,9 @@ COMMON_ARGS="--dataset $DATASET \
   --results_base_folder $EXPS_DIR \
   --tensorboard"
 
-MUON_SHARED="--momentum $MUON_MOM --nesterov True \
-  --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
-
-SIGNMUON_SHARED="--momentum $SM_MOM --nesterov True \
-  --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
-
-LIONMUON_SHARED="--beta1 $LM_BETA1 --beta2 $LM_BETA2 \
-  --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
+MUON_SHARED="--momentum $MUON_MOM --nesterov True --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
+SIGNMUON_SHARED="--momentum $SM_MOM --nesterov True --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
+LIONMUON_SHARED="--beta1 $LM_BETA1 --beta2 $LM_BETA2 --muon_ns_steps $MUON_NS_STEPS --weight_decay $WEIGHT_DECAY"
 
 PIDS=()
 
@@ -179,126 +175,74 @@ run() {
     reap
   done
   echo "[RUN]  $name"
-  OMP_NUM_THREADS=1 $PYTHON ./src/main.py $COMMON_ARGS \
-    --experiment_name "$name" "$@" &
+  OMP_NUM_THREADS=1 $PYTHON ./src/main.py $COMMON_ARGS --experiment_name "$name" "$@" &
   PIDS+=($!)
 }
 
-MUON_LRS="1e-4 2e-4 5e-4 1e-3 2e-3 5e-3 7e-3 1e-2 2e-2 3e-2"
-for LR in $MUON_LRS; do
-  run "muon_lr${LR}" \
-    --opt sign_muon --lr $MUON_ADAMW_LR --muon_lr_factor $LR \
-    --muon_every_k 1 --cheap_mode sign \
-    $MUON_SHARED
-done
-
-SIGNUM_LRS="1e-5 2e-5 5e-5 1e-4 2e-4 5e-4 1e-3 2e-3 5e-3"
-for SLR in $SIGNUM_LRS; do
-  run "signum_slr${SLR}" \
-    --opt sign_muon --lr $SM_ADAMW_LR --muon_lr_factor $SM_LR \
-    --sign_lr $SLR --muon_every_k 10000000 --cheap_mode sign --sign_scaling none \
-    $SIGNMUON_SHARED
-done
-
-SM_K2_LRS="1e-3 2e-3 3e-3 5e-3 7e-3"
-SM_K2_SLRS="1e-6 2e-6 5e-6 1e-5 2e-5 5e-5 1e-4"
-for LR in $SM_K2_LRS; do
-  for SLR in $SM_K2_SLRS; do
-    run "signmuon_k2_lr${LR}_slr${SLR}" \
-      --opt sign_muon --lr $SM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 2 --cheap_mode sign --sign_scaling none \
-      $SIGNMUON_SHARED
+sweep_1d() {
+  local exp_prefix=$1
+  local values=$2
+  local arg_name=$3
+  shift 3
+  local fixed=("$@")
+  local v
+  for v in $values; do
+    run "${exp_prefix}_${arg_name}${v}" "${fixed[@]}" --"$arg_name" "$v"
   done
-done
+}
 
-SM_K5_LRS="1e-3 2e-3 3e-3 5e-3 7e-3"
-SM_K5_SLRS="5e-6 1e-5 2e-5 5e-5 1e-4"
-for LR in $SM_K5_LRS; do
-  for SLR in $SM_K5_SLRS; do
-    run "signmuon_k5_lr${LR}_slr${SLR}" \
-      --opt sign_muon --lr $SM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 5 --cheap_mode sign --sign_scaling none \
-      $SIGNMUON_SHARED
+sweep_2d() {
+  local exp_prefix=$1
+  local values1=$2
+  local name1=$3
+  local values2=$4
+  local name2=$5
+  shift 5
+  local fixed=("$@")
+  local v1 v2
+  for v1 in $values1; do
+    for v2 in $values2; do
+      run "${exp_prefix}_${name1}${v1}_${name2}${v2}" "${fixed[@]}" --"$name1" "$v1" --"$name2" "$v2"
+    done
   done
-done
+}
 
-SM_K20_LRS="3e-3 5e-3 7e-3 1e-2 2e-2"
-SM_K20_SLRS="5e-6 1e-5 2e-5 5e-5 1e-4"
-for LR in $SM_K20_LRS; do
-  for SLR in $SM_K20_SLRS; do
-    run "signmuon_k20_lr${LR}_slr${SLR}" \
-      --opt sign_muon --lr $SM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 20 --cheap_mode sign --sign_scaling none \
-      $SIGNMUON_SHARED
-  done
-done
+if [ "$RUN_REGULAR" = "1" ]; then
+  sweep_1d "muon" "1e-4 2e-4 5e-4 1e-3 2e-3 5e-3 7e-3 1e-2 2e-2 3e-2" "muon_lr_factor" \
+    --opt sign_muon --lr "$MUON_ADAMW_LR" --muon_every_k 1 --cheap_mode sign $MUON_SHARED
 
-SM_K100_LRS="3e-3 5e-3 7e-3 1e-2 2e-2"
-SM_K100_SLRS="5e-6 1e-5 2e-5 5e-5 1e-4"
-for LR in $SM_K100_LRS; do
-  for SLR in $SM_K100_SLRS; do
-    run "signmuon_k100_lr${LR}_slr${SLR}" \
-      --opt sign_muon --lr $SM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 100 --cheap_mode sign --sign_scaling none \
-      $SIGNMUON_SHARED
-  done
-done
+  sweep_1d "signum" "1e-5 2e-5 5e-5 1e-4 2e-4 5e-4 1e-3 2e-3 5e-3" "sign_lr" \
+    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_lr_factor "$SM_LR" --muon_every_k 10000000 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
 
-LM_K1_LRS="5e-4 7e-4 1e-3 2e-3 3e-3"
-for LR in $LM_K1_LRS; do
-  run "lionmuon_k1_lr${LR}" \
-    --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LR \
-    --muon_every_k 1 \
-    $LIONMUON_SHARED
-done
+  sweep_2d "signmuon_k2" "1e-3 2e-3 3e-3 5e-3 7e-3" "muon_lr_factor" "1e-6 2e-6 5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
+    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 2 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
 
-if [ "$MODEL" = "llama" ]; then
+  sweep_2d "signmuon_k5" "1e-3 2e-3 3e-3 5e-3 7e-3" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
+    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 5 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+
+  sweep_2d "signmuon_k20" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
+    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 20 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+
+  sweep_2d "signmuon_k100" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
+    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 100 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+
+  sweep_1d "lionmuon_k1" "5e-4 7e-4 1e-3 2e-3 3e-3" "muon_lr_factor" \
+    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 1 $LIONMUON_SHARED
+
   LM_K2_LRS="5e-4 7e-4 1e-3 2e-3 3e-3 5e-3 7e-3"
-else
-  LM_K2_LRS="1e-3 2e-3 3e-3 5e-3 7e-3"
+
+  sweep_2d "lionmuon_k2" "$LM_K2_LRS" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
+    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 2 $LIONMUON_SHARED
+
+  sweep_2d "lionmuon_k5" "1e-3 2e-3 3e-3 5e-3 7e-3" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
+    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 5 $LIONMUON_SHARED
+
+  sweep_2d "lionmuon_k20" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "2e-5 5e-5 1e-4" "sign_lr" \
+    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 20 $LIONMUON_SHARED
+
+  sweep_2d "lionmuon_k100" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "2e-5 5e-5 1e-4" "sign_lr" \
+    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 100 $LIONMUON_SHARED
 fi
-LM_K2_SLRS="5e-6 1e-5 2e-5 5e-5 1e-4"
-for LR in $LM_K2_LRS; do
-  for SLR in $LM_K2_SLRS; do
-    run "lionmuon_k2_lr${LR}_slr${SLR}" \
-      --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 2 \
-      $LIONMUON_SHARED
-  done
-done
-
-LM_K5_LRS="1e-3 2e-3 3e-3 5e-3 7e-3"
-LM_K5_SLRS="5e-6 1e-5 2e-5 5e-5 1e-4"
-for LR in $LM_K5_LRS; do
-  for SLR in $LM_K5_SLRS; do
-    run "lionmuon_k5_lr${LR}_slr${SLR}" \
-      --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 5 \
-      $LIONMUON_SHARED
-  done
-done
-
-LM_K20_LRS="3e-3 5e-3 7e-3 1e-2 2e-2"
-LM_K20_SLRS="2e-5 5e-5 1e-4"
-for LR in $LM_K20_LRS; do
-  for SLR in $LM_K20_SLRS; do
-    run "lionmuon_k20_lr${LR}_slr${SLR}" \
-      --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 20 \
-      $LIONMUON_SHARED
-  done
-done
-
-LM_K100_LRS="3e-3 5e-3 7e-3 1e-2 2e-2"
-LM_K100_SLRS="2e-5 5e-5 1e-4"
-for LR in $LM_K100_LRS; do
-  for SLR in $LM_K100_SLRS; do
-    run "lionmuon_k100_lr${LR}_slr${SLR}" \
-      --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LR \
-      --sign_lr $SLR --muon_every_k 100 \
-      $LIONMUON_SHARED
-  done
-done
 
 echo "Waiting for remaining jobs..."
 wait
