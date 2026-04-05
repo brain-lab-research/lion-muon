@@ -242,6 +242,17 @@ if [ "$RUN_REGULAR" = "1" ]; then
 
   sweep_2d "lionmuon_k100" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "2e-5 5e-5 1e-4" "sign_lr" \
     --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 100 $LIONMUON_SHARED
+
+  # --- Adaptive srank: lion_muon with srank_alpha, 3 LRs x 4 alphas ---
+  # When srank_alpha > 0, muon_every_k is ignored; per-layer stable rank decides muon vs sign.
+  # sign_lr sets the Lion step lr; muon_lr_factor sets the Muon step lr.
+  LM_SRANK_MUON_LRS="1e-3 3e-3 5e-3"
+  LM_SRANK_SIGN_LRS="1e-5 5e-5 1e-4"
+
+  for ALPHA in 0.05 0.1 0.2 0.5; do
+    sweep_2d "lionmuon_srank_a${ALPHA}" "$LM_SRANK_MUON_LRS" "muon_lr_factor" "$LM_SRANK_SIGN_LRS" "sign_lr" \
+      --opt lion_muon --lr "$LM_ADAMW_LR" --srank_alpha "$ALPHA" $LIONMUON_SHARED
+  done
 fi
 
 echo "Waiting for remaining jobs..."

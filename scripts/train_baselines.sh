@@ -235,6 +235,16 @@ run "lion" \
   --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LM_K100_LR \
   --sign_lr $LM_K100_SLR --muon_every_k 10000000 --beta1 $LM_BETA1 --beta2 $LM_BETA2
 
+# Adaptive srank: best k5 LRs, sweep alpha
+LM_SRANK_LR=2e-3
+LM_SRANK_SLR=5e-5
+for ALPHA in 0.05 0.1 0.2 0.5; do
+  run "lionmuon_srank_a${ALPHA}" \
+    --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LM_SRANK_LR \
+    --sign_lr $LM_SRANK_SLR --srank_alpha $ALPHA \
+    --beta1 $LM_BETA1 --beta2 $LM_BETA2
+done
+
 echo "Waiting for remaining jobs..."
 wait
 echo "Done!"
