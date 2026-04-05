@@ -23,6 +23,7 @@ import torch.distributed as dist
 
 from .muon import zeropower_via_newtonschulz5
 from .schedule import cos_inf_schedule, cosine_wsd_decay_schedule, wsd_schedule
+from .utils import srank_wants_muon
 
 
 class SignMuon(torch.optim.Optimizer):
@@ -58,6 +59,7 @@ class SignMuon(torch.optim.Optimizer):
         cheap_ns_steps=2,
         sign_scaling="muon",
         weight_decay=0.0,
+        srank_alpha=0.0,
         adamw_params=None,
         adamw_lr=1e-3,
         adamw_betas=(0.8, 0.999),
@@ -81,6 +83,7 @@ class SignMuon(torch.optim.Optimizer):
             cheap_ns_steps=cheap_ns_steps,
             sign_scaling=sign_scaling,
             weight_decay=weight_decay,
+            srank_alpha=srank_alpha,
             adamw_lr=adamw_lr,
             adamw_betas=adamw_betas,
             adamw_eps=adamw_eps,
@@ -156,8 +159,10 @@ class SignMuon(torch.optim.Optimizer):
             raise ValueError(f"Unknown cheap_mode: {mode}")
 
     def step(self):
-        is_muon = self._is_muon_step()
+        is_muon_global = self._is_muon_step()
         self._step_count += 1
+        srank_alpha = self.param_groups[0].get("srank_alpha", 0.0)
+        adaptive = srank_alpha > 0
 
         for group in self.param_groups:
 
@@ -170,18 +175,23 @@ class SignMuon(torch.optim.Optimizer):
             cheap_mode = group["cheap_mode"]
             cheap_ns_steps = group["cheap_ns_steps"]
 
-            if is_muon:
-                lr = group["lr"]
-            else:
-                lr = group["cheap_lr"]
+            # When adaptive, lr is chosen per-param below; pre-compute both
+            lr_muon = group["lr"]
+            lr_cheap = group["cheap_lr"]
+            if not adaptive:
+                lr = lr_muon if is_muon_global else lr_cheap
 
             # Distributed: compute updates, flatten, all-reduce
             total_params = sum(p.numel() for p in params)
             updates_flat = torch.zeros(
                 total_params, device="cuda", dtype=torch.bfloat16
             )
+            # Track per-param lr for the apply step (only needed in adaptive mode)
+            if adaptive:
+                param_lrs = []
             curr_idx = 0
             for i, p in enumerate(params):
+                did_muon = False
                 if i % self.world_size == self.rank:
                     g = p.grad
                     if g.ndim > 2:
@@ -197,7 +207,13 @@ class SignMuon(torch.optim.Optimizer):
                     else:
                         g = buf.clone()
 
-                    if is_muon:
+                    # Decide muon vs cheap for this param
+                    if adaptive:
+                        did_muon = srank_wants_muon(buf, srank_alpha)
+                    else:
+                        did_muon = is_muon_global
+
+                    if did_muon:
                         g = self._muon_update(g, ns_steps=group["ns_steps"])
                         state["cached_direction"] = g.clone()
                     else:
@@ -205,6 +221,9 @@ class SignMuon(torch.optim.Optimizer):
                         g = self._cheap_update(g, cheap_mode, cheap_ns_steps, group["sign_scaling"], cached_dir)
 
                     updates_flat[curr_idx : curr_idx + p.numel()] = g.flatten()
+
+                if adaptive:
+                    param_lrs.append(lr_muon if did_muon else lr_cheap)
                 curr_idx += p.numel()
 
             if self.world_size > 1:
@@ -212,15 +231,16 @@ class SignMuon(torch.optim.Optimizer):
 
             curr_idx = 0
             wd = group["weight_decay"]
-            for p in params:
+            for j, p in enumerate(params):
                 g = (
                     updates_flat[curr_idx : curr_idx + p.numel()]
                     .view_as(p.data)
                     .type_as(p.data)
                 )
+                plr = param_lrs[j] if adaptive else lr
                 if wd > 0:
-                    p.data.mul_(1 - lr * wd)
-                p.data.add_(g, alpha=-lr)
+                    p.data.mul_(1 - plr * wd)
+                p.data.add_(g, alpha=-plr)
                 curr_idx += p.numel()
 
             ############################

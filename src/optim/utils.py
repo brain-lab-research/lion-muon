@@ -9,6 +9,26 @@ import torch
 import torch.distributed as dist
 
 
+def srank_wants_muon(buf, alpha):
+    """Return True if stable rank of buf is below alpha * min(m, n).
+
+    Uses 3 power iterations to estimate the top singular value.
+    Cost: O(mn) — negligible compared to Newton-Schulz.
+    """
+    threshold = alpha * min(buf.size(0), buf.size(1))
+    frob_sq = buf.pow(2).sum().item()
+    # Power iteration for top singular value
+    v = torch.randn(buf.size(1), 1, device=buf.device, dtype=buf.dtype)
+    for _ in range(3):
+        u = buf @ v
+        u = u / (u.norm() + 1e-7)
+        v = buf.T @ u
+        v = v / (v.norm() + 1e-7)
+    sigma1_sq = (buf @ v).pow(2).sum().item()
+    srank = frob_sq / (sigma1_sq + 1e-12)
+    return srank <= threshold
+
+
 def get_batch(datareader, device="cpu"):
     x, y = datareader.sample_batch()
     if "cuda" in torch.device(device).type:

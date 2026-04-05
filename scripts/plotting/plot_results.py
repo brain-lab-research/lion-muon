@@ -224,8 +224,7 @@ def get_runs(wandb_project, prefix):
 
 
 def _is_excluded_run_key(key):
-    base = key.replace('_nonesterov', '')
-    return 'dmuon' in base
+    return False
 
 
 def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns_steps=6,
@@ -247,7 +246,7 @@ def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns
 
     if opt in ('adamw', 'lion'):
         return iterations * model_flops_per_iter
-    elif opt in ('muon', 'sign_muon', 'lion_muon') or str(opt).endswith('dmuon'):
+    elif opt in ('muon', 'sign_muon', 'lion_muon'):
         if K <= 1:
             return iterations * (model_flops_per_iter + ns_flops_per_iter)
         return iterations * (model_flops_per_iter + ns_flops_per_iter / K)

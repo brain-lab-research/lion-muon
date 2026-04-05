@@ -86,8 +86,6 @@ def parse_args(base_parser, args, namespace):
             "muon",
             "sign_muon",
             "lion_muon",
-            "signdmuon",
-            "lidmuon",
             "adamuon",
             "rmsspectral",
             "rmsspectral-sania",
@@ -143,6 +141,7 @@ def parse_args(base_parser, args, namespace):
     parser.add_argument("--cheap_mode", default="norm", type=str, choices=["sign", "norm", "cheap_ns", "cached"])
     parser.add_argument("--cheap_ns_steps", default=2, type=int)  # NS steps for cheap_ns mode
     parser.add_argument("--sign_scaling", default="muon", type=str, choices=["muon", "frob", "none"])  # sign update scaling
+    parser.add_argument("--srank_alpha", default=0.0, type=float)  # adaptive stable-rank threshold: use Muon when srank(M) <= alpha * min(m,n). 0 = disabled (use fixed muon_every_k)
     parser.add_argument("--adamuon_ns_steps", default=6, type=int)
     parser.add_argument("--adamuon_rms_factor", default=0.2, type=float)
     parser.add_argument(

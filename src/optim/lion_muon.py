@@ -20,6 +20,7 @@ import torch.distributed as dist
 
 from .muon import zeropower_via_newtonschulz5
 from .schedule import cos_inf_schedule, cosine_wsd_decay_schedule, wsd_schedule
+from .utils import srank_wants_muon
 
 
 class LionMuon(torch.optim.Optimizer):
@@ -49,6 +50,7 @@ class LionMuon(torch.optim.Optimizer):
         ns_steps=6,
         muon_every_k=5,
         weight_decay=0.0,
+        srank_alpha=0.0,
         adamw_params=None,
         adamw_lr=3e-4,
         adamw_betas=(0.8, 0.999),
@@ -66,6 +68,7 @@ class LionMuon(torch.optim.Optimizer):
             ns_steps=ns_steps,
             muon_every_k=muon_every_k,
             weight_decay=weight_decay,
+            srank_alpha=srank_alpha,
             adamw_lr=adamw_lr,
             adamw_lr_ratio=adamw_lr / lr if lr > 0 else 1.0,
             adamw_betas=adamw_betas,
@@ -97,8 +100,10 @@ class LionMuon(torch.optim.Optimizer):
         return k <= 1 or (self._step_count % k) == 0
 
     def step(self):
-        is_muon = self._is_muon_step()
+        is_muon_global = self._is_muon_step()
         self._step_count += 1
+        srank_alpha = self.param_groups[0].get("srank_alpha", 0.0)
+        adaptive = srank_alpha > 0
 
         for group in self.param_groups:
 
@@ -111,13 +116,17 @@ class LionMuon(torch.optim.Optimizer):
             beta2 = group["beta2"]
             muon_lr = group["lr"]
             lion_lr = group["lion_lr_ratio"] * group["lr"]  # scales with scheduler
-            lr = muon_lr if is_muon else lion_lr
+            if not adaptive:
+                lr = muon_lr if is_muon_global else lion_lr
 
             total_params = sum(p.numel() for p in params)
             updates_flat = torch.zeros(total_params, device="cuda", dtype=torch.bfloat16)
+            if adaptive:
+                param_lrs = []
             curr_idx = 0
 
             for i, p in enumerate(params):
+                did_muon = False
                 if i % self.world_size == self.rank:
                     g = p.grad
                     assert g is not None
@@ -133,7 +142,13 @@ class LionMuon(torch.optim.Optimizer):
                     # Lion interpolation: direction to update
                     update = m * beta1 + g * (1 - beta1)
 
-                    if is_muon:
+                    # Decide muon vs lion for this param
+                    if adaptive:
+                        did_muon = srank_wants_muon(update, srank_alpha)
+                    else:
+                        did_muon = is_muon_global
+
+                    if did_muon:
                         # NS orthogonalization + Moonshot scaling
                         update = zeropower_via_newtonschulz5(update, steps=group["ns_steps"])
                         update *= 0.2 * max(update.size(0), update.size(1)) ** 0.5
@@ -146,6 +161,8 @@ class LionMuon(torch.optim.Optimizer):
                     # Update momentum with beta2 (Lion rule, after computing direction)
                     m.mul_(beta2).add_(g, alpha=1 - beta2)
 
+                if adaptive:
+                    param_lrs.append(muon_lr if did_muon else lion_lr)
                 curr_idx += p.numel()
 
             if self.world_size > 1:
@@ -153,15 +170,16 @@ class LionMuon(torch.optim.Optimizer):
 
             curr_idx = 0
             wd = group["weight_decay"]
-            for p in params:
+            for j, p in enumerate(params):
                 u = (
                     updates_flat[curr_idx : curr_idx + p.numel()]
                     .view_as(p.data)
                     .type_as(p.data)
                 )
+                plr = param_lrs[j] if adaptive else lr
                 if wd > 0:
-                    p.data.mul_(1 - lr * wd)
-                p.data.add_(u, alpha=-lr)
+                    p.data.mul_(1 - plr * wd)
+                p.data.add_(u, alpha=-plr)
                 curr_idx += p.numel()
 
             ############################
