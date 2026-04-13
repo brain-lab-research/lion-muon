@@ -136,10 +136,7 @@ LM_K5_LR=2e-3;   LM_K5_SLR=5e-5
 LM_K20_LR=5e-3;  LM_K20_SLR=5e-5
 LM_K100_LR=7e-3; LM_K100_SLR=5e-5
 
-DATASET_DIR_ARG=""
-if [ "$DATASET" != "fineweb" ]; then
-  DATASET_DIR_ARG="--datasets_dir $DATASETS_DIR"
-fi
+DATASET_DIR_ARG="--datasets_dir $DATASETS_DIR"
 
 COMMON_ARGS="--dataset $DATASET \
   $DATASET_DIR_ARG \
@@ -236,13 +233,21 @@ run "lion" \
   --sign_lr $LM_K100_SLR --muon_every_k 10000000 --beta1 $LM_BETA1 --beta2 $LM_BETA2
 
 # Adaptive srank: best k5 LRs, sweep alpha
-LM_SRANK_LR=2e-3
-LM_SRANK_SLR=5e-5
-for ALPHA in 0.05 0.1 0.2 0.5; do
+LM_SRANK_LR=1e-3
+LM_SRANK_LR_0p002=3e-3
+LM_SRANK_SLR=1e-4
+
+run "lionmuon_srank_a0.002" \
+  --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LM_SRANK_LR_0p002 \
+  --sign_lr $LM_SRANK_SLR --srank_alpha 0.002 \
+  --beta1 $LM_BETA1 --beta2 $LM_BETA2
+
+for ALPHA in 0.004 0.006 0.008 0.01; do
   run "lionmuon_srank_a${ALPHA}" \
     --opt lion_muon --lr $LM_ADAMW_LR --muon_lr_factor $LM_SRANK_LR \
     --sign_lr $LM_SRANK_SLR --srank_alpha $ALPHA \
     --beta1 $LM_BETA1 --beta2 $LM_BETA2
+
 done
 
 echo "Waiting for remaining jobs..."

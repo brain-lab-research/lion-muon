@@ -187,11 +187,23 @@ def train(
 
             current_lrs = [param_group["lr"] for param_group in opt.param_groups]
 
-            print(
+            log_str = (
                 f"Train: Iter={curr_iter} ({epoch:0.3f} epochs) "
                 f"train_loss={train_loss:.3f} iter_dt={dt:.2e}s "
                 f"lr={current_lrs[0]:.2e}"
             )
+            
+            # Add srank if adaptive optimizer
+            if hasattr(opt, 'get_cumulative_diagnostics'):
+                cdiag = opt.get_cumulative_diagnostics() or {}
+                if cdiag.get("srank_count", 0) > 0:
+                    srank_mean = cdiag.get("srank_mean", 0.0)
+                    srank_var = cdiag.get("srank_var", 0.0)
+                    ns_count = cdiag.get("ns_count", 0)
+                    total_count = cdiag.get("srank_count", 1)
+                    log_str += f" srank={srank_mean:.4f}±{srank_var**0.5:.4f} (NS={ns_count}/{total_count})"
+            
+            print(log_str)
 
             stats["train_loss"].append(train_loss)
 
@@ -212,10 +224,21 @@ def train(
                     k = opt.param_groups[0].get("muon_every_k", 1)
                     was_muon = ((opt._step_count - 1) % k) == 0 if k > 1 else True
                     tb.add_scalar("train/is_muon_step", int(was_muon), curr_iter)
+                if hasattr(opt, 'get_cumulative_diagnostics'):
+                    cdiag = opt.get_cumulative_diagnostics() or {}
+                    if cdiag.get("srank_count", 0) > 0:
+                        tb.add_scalar("train/srank_mean", float(cdiag.get("srank_mean", 0.0)), curr_iter)
+                        tb.add_scalar("train/srank_var", float(cdiag.get("srank_var", 0.0)), curr_iter)
+                        ratios = cdiag.get("srank_ratios", [])
+                        if ratios:
+                            import numpy as np
+                            tb.add_histogram("train/srank_dist", np.array(ratios), curr_iter)
 
             grad_norms = []
 
     stats["wall_time"] = time.time() - wall_t0
+    if hasattr(opt, "get_cumulative_diagnostics"):
+        stats["opt_diagnostics"] = opt.get_cumulative_diagnostics()
     return stats
 
 

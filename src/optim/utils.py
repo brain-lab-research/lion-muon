@@ -4,9 +4,30 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
-import math
 import torch
 import torch.distributed as dist
+
+
+def estimate_stable_rank(buf, power_iters=3):
+    """Estimate stable-rank statistics from a matrix-like tensor.
+
+    Returns:
+        (srank_ratio, srank_sq)
+        srank_ratio = ||A||_F / ||A||_op
+        srank_sq    = ||A||_F^2 / ||A||_op^2
+    """
+    frob = buf.norm().item()
+    # Power iteration for top singular value (operator norm)
+    v = torch.randn(buf.size(1), 1, device=buf.device, dtype=buf.dtype)
+    for _ in range(power_iters):
+        u = buf @ v
+        u = u / (u.norm() + 1e-7)
+        v = buf.T @ u
+        v = v / (v.norm() + 1e-7)
+    sigma1 = (buf @ v).norm().item()
+    srank_ratio = frob / (sigma1 + 1e-12)
+    srank_sq = (frob * frob) / (sigma1 * sigma1 + 1e-12)
+    return srank_ratio, srank_sq
 
 
 def srank_wants_muon(buf, alpha):
@@ -16,17 +37,8 @@ def srank_wants_muon(buf, alpha):
     Cost: O(mn) — negligible compared to Newton-Schulz.
     """
     threshold = alpha * min(buf.size(0), buf.size(1))
-    frob_sq = buf.pow(2).sum().item()
-    # Power iteration for top singular value
-    v = torch.randn(buf.size(1), 1, device=buf.device, dtype=buf.dtype)
-    for _ in range(3):
-        u = buf @ v
-        u = u / (u.norm() + 1e-7)
-        v = buf.T @ u
-        v = v / (v.norm() + 1e-7)
-    sigma1_sq = (buf @ v).pow(2).sum().item()
-    srank = frob_sq / (sigma1_sq + 1e-12)
-    return srank <= threshold
+    _, srank_sq = estimate_stable_rank(buf, power_iters=3)
+    return srank_sq <= threshold
 
 
 def get_batch(datareader, device="cpu"):

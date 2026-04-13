@@ -116,10 +116,7 @@ else
   EXPS_DIR="./exps_tuning_${DATASET_PREFIX}_${MODEL_PREFIX}"
 fi
 
-DATASET_DIR_ARG=""
-if [ "$DATASET" != "fineweb" ]; then
-  DATASET_DIR_ARG="--datasets_dir $DATASETS_DIR"
-fi
+DATASET_DIR_ARG="--datasets_dir $DATASETS_DIR"
 
 COMMON_ARGS="--dataset $DATASET \
   $DATASET_DIR_ARG \
@@ -208,40 +205,68 @@ sweep_2d() {
 }
 
 if [ "$RUN_REGULAR" = "1" ]; then
-  sweep_1d "muon" "1e-4 2e-4 5e-4 1e-3 2e-3 5e-3 7e-3 1e-2 2e-2 3e-2" "muon_lr_factor" \
-    --opt sign_muon --lr "$MUON_ADAMW_LR" --muon_every_k 1 --cheap_mode sign $MUON_SHARED
+  # Keep legacy run names so existing exps_tuning_* results are detected by [SKIP].
+  for v in 1e-4 2e-4 5e-4 1e-3 2e-3 5e-3 7e-3 1e-2 2e-2 3e-2; do
+    run "muon_lr${v}" --opt sign_muon --lr "$MUON_ADAMW_LR" --muon_every_k 1 --cheap_mode sign $MUON_SHARED --muon_lr_factor "$v"
+  done
 
-  sweep_1d "signum" "1e-5 2e-5 5e-5 1e-4 2e-4 5e-4 1e-3 2e-3 5e-3" "sign_lr" \
-    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_lr_factor "$SM_LR" --muon_every_k 10000000 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+  for v in 1e-5 2e-5 5e-5 1e-4 2e-4 5e-4 1e-3 2e-3 5e-3; do
+    run "signum_slr${v}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_lr_factor "$SM_LR" --muon_every_k 10000000 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --sign_lr "$v"
+  done
 
-  sweep_2d "signmuon_k2" "1e-3 2e-3 3e-3 5e-3 7e-3" "muon_lr_factor" "1e-6 2e-6 5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
-    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 2 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+  for lr in 1e-3 2e-3 3e-3 5e-3 7e-3; do
+    for slr in 1e-6 2e-6 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_k2_lr${lr}_slr${slr}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 2 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_2d "signmuon_k5" "1e-3 2e-3 3e-3 5e-3 7e-3" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
-    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 5 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+  for lr in 1e-3 2e-3 3e-3 5e-3 7e-3; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_k5_lr${lr}_slr${slr}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 5 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_2d "signmuon_k20" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
-    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 20 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+  for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_k20_lr${lr}_slr${slr}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 20 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_2d "signmuon_k100" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
-    --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 100 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED
+  for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_k100_lr${lr}_slr${slr}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 100 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_1d "lionmuon_k1" "5e-4 7e-4 1e-3 2e-3 3e-3" "muon_lr_factor" \
-    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 1 $LIONMUON_SHARED
+  for lr in 5e-4 7e-4 1e-3 2e-3 3e-3; do
+    run "lionmuon_k1_lr${lr}" --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 1 $LIONMUON_SHARED --muon_lr_factor "$lr"
+  done
 
   LM_K2_LRS="5e-4 7e-4 1e-3 2e-3 3e-3 5e-3 7e-3"
 
-  sweep_2d "lionmuon_k2" "$LM_K2_LRS" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
-    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 2 $LIONMUON_SHARED
+  for lr in $LM_K2_LRS; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "lionmuon_k2_lr${lr}_slr${slr}" --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 2 $LIONMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_2d "lionmuon_k5" "1e-3 2e-3 3e-3 5e-3 7e-3" "muon_lr_factor" "5e-6 1e-5 2e-5 5e-5 1e-4" "sign_lr" \
-    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 5 $LIONMUON_SHARED
+  for lr in 1e-3 2e-3 3e-3 5e-3 7e-3; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "lionmuon_k5_lr${lr}_slr${slr}" --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 5 $LIONMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_2d "lionmuon_k20" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "2e-5 5e-5 1e-4" "sign_lr" \
-    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 20 $LIONMUON_SHARED
+  for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
+    for slr in 2e-5 5e-5 1e-4; do
+      run "lionmuon_k20_lr${lr}_slr${slr}" --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 20 $LIONMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
-  sweep_2d "lionmuon_k100" "3e-3 5e-3 7e-3 1e-2 2e-2" "muon_lr_factor" "2e-5 5e-5 1e-4" "sign_lr" \
-    --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 100 $LIONMUON_SHARED
+  for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
+    for slr in 2e-5 5e-5 1e-4; do
+      run "lionmuon_k100_lr${lr}_slr${slr}" --opt lion_muon --lr "$LM_ADAMW_LR" --muon_every_k 100 $LIONMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
 
   # --- Adaptive srank: lion_muon with srank_alpha, 3 LRs x 4 alphas ---
   # When srank_alpha > 0, muon_every_k is ignored; per-layer stable rank decides muon vs sign.
@@ -249,7 +274,7 @@ if [ "$RUN_REGULAR" = "1" ]; then
   LM_SRANK_MUON_LRS="1e-3 3e-3 5e-3"
   LM_SRANK_SIGN_LRS="1e-5 5e-5 1e-4"
 
-  for ALPHA in 0.05 0.1 0.2 0.5; do
+  for ALPHA in 0.002 0.004 0.006 0.008 0.01; do
     sweep_2d "lionmuon_srank_a${ALPHA}" "$LM_SRANK_MUON_LRS" "muon_lr_factor" "$LM_SRANK_SIGN_LRS" "sign_lr" \
       --opt lion_muon --lr "$LM_ADAMW_LR" --srank_alpha "$ALPHA" $LIONMUON_SHARED
   done

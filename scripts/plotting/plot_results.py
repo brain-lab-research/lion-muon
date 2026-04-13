@@ -67,6 +67,10 @@ NAMES = {
     'lionmuon_k20':   'LiMuon K=20',
     'lionmuon_k100':  'LiMuon K=100',
     'lion':           'Lion (K=\u221e)',
+    'lionmuon_srank_a0.05': 'LiMuon sRank a=0.05',
+    'lionmuon_srank_a0.1':  'LiMuon sRank a=0.10',
+    'lionmuon_srank_a0.2':  'LiMuon sRank a=0.20',
+    'lionmuon_srank_a0.5':  'LiMuon sRank a=0.50',
 }
 
 # --- Visual style ---
@@ -91,6 +95,10 @@ STYLE = {
     'LiMuon K=20':       {'color': '#6699ee', 'ls': ':',        'lw': 2.2, 'marker': 'o'},
     'LiMuon K=100':      {'color': '#99bbff', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': 'o'},
     'Lion (K=\u221e)':   {'color': '#c8d8f5', 'ls': (0,(5,10)), 'lw': 2.2, 'marker': 'o'},
+    'LiMuon sRank a=0.05': {'color': '#006d5b', 'ls': '-',        'lw': 2.4, 'marker': 'D'},
+    'LiMuon sRank a=0.10': {'color': '#008f78', 'ls': '--',       'lw': 2.4, 'marker': 'D'},
+    'LiMuon sRank a=0.20': {'color': '#2fa892', 'ls': '-.',       'lw': 2.4, 'marker': 'D'},
+    'LiMuon sRank a=0.50': {'color': '#67c7b7', 'ls': (0,(1,3)),  'lw': 2.4, 'marker': 'D'},
 }
 
 # Plot order: SignMuon family high-K first (behind), then LiMuon family
@@ -98,6 +106,7 @@ ORDER = [
     'adamw',
     'signum', 'signmuon_k100', 'signmuon_k20', 'signmuon_k5', 'signmuon_k2', 'muon',
     'lion', 'lionmuon_k100', 'lionmuon_k20', 'lionmuon_k5', 'lionmuon_k2', 'lionmuon_k1',
+    'lionmuon_srank_a0.5', 'lionmuon_srank_a0.2', 'lionmuon_srank_a0.1', 'lionmuon_srank_a0.05',
 ]
 
 def parse_log(logfile):
@@ -150,6 +159,9 @@ def get_local_runs(exps_dir, prefix, model_name=None):
             continue  # still running / mid-write
         val_loss = d.get('val_loss', [])
         args = d.get('args', {})
+        opt_diag = d.get('opt_diagnostics', {}) or {}
+        opt_diag_hist = d.get('opt_diag_history', []) or []
+        opt_step_diag_hist = d.get('opt_step_diag_history', []) or []
         if model_name and args.get('model') and args.get('model') != model_name:
             continue
         if not val_loss:
@@ -165,12 +177,17 @@ def get_local_runs(exps_dir, prefix, model_name=None):
         opt = args.get('opt', '')
         K = args.get('muon_every_k', 1)
         ns = args.get('muon_ns_steps', 6)
+        srank_alpha = args.get('srank_alpha', 0.0)
         # type=bool in argparse doesn't parse 'False' correctly; use name instead
         nesterov = 'nonesterov' not in exp
-        iters = list(range(eval_interval, eval_interval * (len(val_loss) + 1), eval_interval))
+        iters = list(range(0, eval_interval * len(val_loss), eval_interval))
         key = exp[len(prefix):] if prefix and exp.startswith(prefix) else exp
         runs[key] = {
             'exp': exp, 'opt': opt, 'K': K, 'ns_steps': ns,
+            'srank_alpha': srank_alpha,
+            'opt_diag': opt_diag,
+            'opt_diag_hist': opt_diag_hist,
+            'opt_step_diag_hist': opt_step_diag_hist,
             'nesterov': nesterov,
             'iters': iters, 'losses': val_loss,
             'best_loss': min(val_loss),
@@ -200,6 +217,7 @@ def get_runs(wandb_project, prefix):
         opt = cfg.get('opt', {}).get('value', '')
         K = cfg.get('muon_every_k', {}).get('value', 1)
         ns = cfg.get('muon_ns_steps', {}).get('value', 6)
+        srank_alpha = cfg.get('srank_alpha', {}).get('value', 0.0)
         nesterov = 'nonesterov' not in exp
         iters, losses = parse_log(log_f)
         if not losses:
@@ -214,6 +232,7 @@ def get_runs(wandb_project, prefix):
         best_loss = min(losses)
         runs[key] = {
             'exp': exp, 'opt': opt, 'K': K, 'ns_steps': ns,
+            'srank_alpha': srank_alpha,
             'nesterov': nesterov,
             'iters': iters, 'losses': losses,
             'best_loss': best_loss,
@@ -224,15 +243,24 @@ def get_runs(wandb_project, prefix):
 
 
 def _is_excluded_run_key(key):
-    return False
+    return "signdmuon" in key or "lidmuon" in key or "rmsspectral" in key
 
 
 def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns_steps=6,
-                  vocab_size=50304):
+                  srank_alpha=0.0, vocab_size=50304, opt_diag=None):
     params_per_layer = 4 * n_embd**2 + 8 * n_embd**2
     embed_params = vocab_size * n_embd + seq_len * n_embd
     n_params = n_layer * params_per_layer + embed_params
     model_flops_per_iter = 6 * n_params * seq_len * batch_size
+
+    # If exact per-run optimizer diagnostics are present, use them.
+    if isinstance(opt_diag, dict) and opt_diag:
+        ns_total = float(opt_diag.get('ns_flops', 0.0) or 0.0)
+        sign_total = float(opt_diag.get('sign_flops', 0.0) or 0.0)
+        srank_total = float(opt_diag.get('srank_gate_flops', 0.0) or 0.0)
+        if (ns_total + sign_total + srank_total) > 0.0:
+            total = iterations * model_flops_per_iter + ns_total + sign_total + srank_total
+            return total, total
 
     d = n_embd
     ns_flops_per_layer = 0
@@ -244,29 +272,221 @@ def compute_flops(n_layer, n_embd, seq_len, batch_size, iterations, opt, K=1, ns
     ns_flops_per_iter = n_layer * ns_flops_per_layer
     sign_flops_per_iter = n_layer * matvec_mn_sum_per_layer
 
+    # Stable-rank gate overhead in adaptive mode (srank_alpha > 0).
+    # From srank_wants_muon(update, alpha):
+    # - frob_sq = sum(update^2): ~2mn
+    # - 3x power iterations: each has (A @ v, A^T @ u): ~4mn
+    # - sigma1_sq = sum((A @ v)^2): ~2mn
+    # Total ~16mn per matrix, summed over Muon matrices per transformer layer.
+    srank_check_flops_per_iter = n_layer * (16 * matvec_mn_sum_per_layer)
+
     if opt in ('adamw', 'lion'):
-        return iterations * model_flops_per_iter
+        total = iterations * model_flops_per_iter
+        return total, total
     elif opt in ('muon', 'sign_muon', 'lion_muon'):
+        if srank_alpha and srank_alpha > 0:
+            if isinstance(opt_diag, dict) and opt_diag.get('srank_count', 0) > 0:
+                p_muon = float(opt_diag['ns_count']) / float(opt_diag['srank_count'])
+                extra = p_muon * ns_flops_per_iter + (1.0 - p_muon) * sign_flops_per_iter + srank_check_flops_per_iter
+                total = iterations * (model_flops_per_iter + extra)
+                return total, total
+
+            # Exact interval without per-run branch telemetry:
+            # low  => all layers choose sign after srank check
+            # high => all layers choose Muon after srank check
+            low = iterations * (model_flops_per_iter + srank_check_flops_per_iter + sign_flops_per_iter)
+            high = iterations * (model_flops_per_iter + srank_check_flops_per_iter + ns_flops_per_iter)
+            return low, high
         if K <= 1:
-            return iterations * (model_flops_per_iter + ns_flops_per_iter)
-        return iterations * (model_flops_per_iter + ns_flops_per_iter / K)
-    return iterations * model_flops_per_iter
+            total = iterations * (model_flops_per_iter + ns_flops_per_iter)
+            return total, total
+        p_muon = 1.0 / K
+        extra = p_muon * ns_flops_per_iter + (1.0 - p_muon) * sign_flops_per_iter
+        total = iterations * (model_flops_per_iter + extra)
+        return total, total
+    total = iterations * model_flops_per_iter
+    return total, total
 
 
 def _base_key(key):
     return key.replace('_nonesterov', '')
 
 
+def _display_name_for_key(key):
+    bkey = _base_key(key)
+    if bkey in NAMES:
+        return NAMES[bkey]
+    m = re.match(r'^lionmuon_srank_a(.+)$', bkey)
+    if m:
+        return f"LiMuon sRank a={m.group(1)}"
+    return bkey
+
+
 def _iter_plot_runs(runs, ordered_keys):
+    import colorsys
+    srank_alphas = []
+    for k, r in runs.items():
+        if 'srank_alpha' in r and r['srank_alpha'] > 0:
+            srank_alphas.append(r['srank_alpha'])
+    srank_alphas = sorted(list(set(srank_alphas)))
+    
     for nesterov_pass in (True, False):
         for key in ordered_keys:
             rkey = key if nesterov_pass else key + '_nonesterov'
             r = runs.get(rkey)
             if not r or r.get('nesterov', True) != nesterov_pass:
                 continue
-            label = NAMES.get(_base_key(rkey), rkey)
+            label = _display_name_for_key(rkey)
             style = STYLE.get(label, {})
+            if not style and 'sRank' in label:
+                a = r.get('srank_alpha', 0.0)
+                # Map alpha to a pure green gradient (lowest a = lighter, highest a = darker)
+                try:
+                    idx = srank_alphas.index(a)
+                    ratio = idx / max(1, len(srank_alphas) - 1)
+                    hue = 0.33  # stick to green
+                    sat = 0.4 + 0.6 * ratio   # 0.4 to 1.0 (pale/light to deep/saturated)
+                    val = 0.9 - 0.5 * ratio   # 0.9 to 0.4 (bright to dark)
+                except:
+                    hue, sat, val = 0.33, 0.8, 0.7
+                rgb = colorsys.hsv_to_rgb(hue, sat, val)
+                hex_color = '#%02x%02x%02x' % (int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+                style = {'color': hex_color, 'ls': '-', 'lw': 2.4, 'marker': 'D'}
             yield rkey, r, label, style, nesterov_pass
+
+
+
+def get_tb_srank_metrics(exp_name):
+    import os
+    import math
+    import copy
+    try:
+        from tensorboard.backend.event_processing import event_accumulator
+        tb_dir = os.path.join("exps", "tb_logs", exp_name)
+        if not os.path.exists(tb_dir):
+            return None, None, None
+        ea = event_accumulator.EventAccumulator(tb_dir, size_guidance={'histograms': 10, 'scalars': 5000})
+        ea.Reload()
+        tags = ea.Tags()
+        
+        means, vars_, hist = [], [], None
+        if "train/srank_mean" in tags.get('scalars', []):
+            means = [(e.step, e.value) for e in ea.Scalars("train/srank_mean")]
+        if "train/srank_var" in tags.get('scalars', []):
+            vars_ = [(e.step, e.value) for e in ea.Scalars("train/srank_var")]
+        if "train/srank_dist" in tags.get('histograms', []):
+            hists = ea.Histograms("train/srank_dist")
+            if hists:
+                last_hist = hists[-1].histogram_value
+                counts = list(last_hist.bucket)
+                limits = list(last_hist.bucket_limit)
+                hist = (limits, counts)
+        return means, vars_, hist
+    except Exception as e:
+        print(f"Error reading TB info: {e}")
+        pass
+    return None, None, None
+
+def smooth_curve(points, window=10):
+    if not points: return []
+    import numpy as np
+    x = [p[0] for p in points]
+    y = [p[1] for p in points]
+    if len(y) < window:
+        window = max(1, len(y) // 2)
+    y_padded = np.pad(y, (window//2, window-1-window//2), mode='edge')
+    y_smooth = np.convolve(y_padded, np.ones(window)/window, mode='valid')
+    return list(zip(x, y_smooth))
+
+def plot_adaptive_diagnostics(dataset_name, model_name, runs):
+    """Diagnostics for adaptive LiMuon runs (Mean, Variance, Histogram)."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import os
+    import colorsys
+    
+    adaptive_items = []
+    srank_alphas = []
+    for key, r in runs.items():
+        a = float(r.get('srank_alpha', 0.0) or 0.0)
+        if a > 0:
+            adaptive_items.append((key, r, a))
+            srank_alphas.append(a)
+
+    if not adaptive_items:
+        return
+        
+    srank_alphas = sorted(list(set(srank_alphas)))
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5.5))
+
+    for key, r, a in sorted(adaptive_items, key=lambda x: x[2]):
+        label = _display_name_for_key(key)
+        
+        # Get exact color from the green spectrum
+        try:
+            idx = srank_alphas.index(a)
+            ratio = idx / max(1, len(srank_alphas) - 1)
+            hue = 0.33
+            sat = 0.4 + 0.6 * ratio
+            val = 0.9 - 0.5 * ratio
+        except:
+            hue, sat, val = 0.33, 0.8, 0.7
+        rgb = colorsys.hsv_to_rgb(hue, sat, val)
+        color = '#%02x%02x%02x' % (int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+        
+        means, vars_, hist = get_tb_srank_metrics(r['exp'])
+        
+        if means:
+            s_means = smooth_curve(means, window=50) # Very smooth
+            x_m = [p[0] for p in s_means]
+            y_m = [p[1] for p in s_means]
+            ax1.plot(x_m, y_m, lw=2.2, label=label, color=color)
+            
+            if vars_:
+                s_vars = smooth_curve(vars_, window=50)
+                x_v = [p[0] for p in s_vars]
+                y_v = [p[1] for p in s_vars]
+                ax2.plot(x_v, y_v, lw=2.2, label=label, color=color)
+                
+                # Interpolate exactly for filling shaded region
+                std_interp = np.interp(x_m, x_v, np.sqrt(np.maximum(y_v, 0)))
+                ax1.fill_between(x_m, np.array(y_m) - std_interp, np.array(y_m) + std_interp, color=color, alpha=0.15)
+                
+            if hist:
+                limits, counts = hist
+                # Since buckets represent ranges, len(counts) == len(limits).
+                # We can plot as step using 'post' where limits[0] is X[0], counts[0] is Y[0].
+                mids = [(limits[i-1] + limits[i])/2.0 for i in range(1, len(limits))]
+                if len(mids) == len(counts):
+                    ax3.plot(mids, counts, marker='o', ls='-', lw=2.2, label=label, color=color)
+                else: 
+                     ax3.step(limits, counts, where='post', lw=2.2, label=label, color=color)
+                     
+    ax1.set_xlabel('Iteration', fontsize=13)
+    ax1.set_ylabel('Mean Stable Rank', fontsize=13)
+    ax1.set_title('Stable Rank Mean ± 1 Std (Smoothed Window=50)', fontsize=14)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=10)
+    
+    ax2.set_xlabel('Iteration', fontsize=13)
+    ax2.set_ylabel('Variance of Stable Rank', fontsize=13)
+    ax2.set_title('Stable Rank Variance', fontsize=14)
+    ax2.grid(True, alpha=0.3)
+    
+    ax3.set_xlabel('Stable Rank Value', fontsize=13)
+    ax3.set_ylabel('Matrix Count', fontsize=13)
+    ax3.set_title('Final Gradient Histogram', fontsize=14)
+    ax3.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out_path = os.path.join(RESULTS_DIR, f'{dataset_name}_{model_name}_adaptive_diag.png')
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Adaptive diagnostics plot saved to {out_path}")
+
+
+
 
 
 def plot_dataset(dataset_name, model_name):
@@ -294,17 +514,25 @@ def plot_dataset(dataset_name, model_name):
 
     runs = {k: v for k, v in runs.items() if not _is_excluded_run_key(k)}
 
-    dynamic_order = ORDER
+    dynamic_order = ORDER + [k for k in sorted(runs.keys()) if _base_key(k) not in ORDER]
 
     model_title = 'Base' if model_name == 'base' else 'Llama'
     print(f"\n{ds['title']} ({model_title}) results (sorted by best val_loss):")
-    print(f"  {'Optimizer':<30s} {'nesterov':>8s} {'best_loss':>10s} {'ppl':>8s} {'wall(min)':>10s}")
-    print("  " + "-" * 70)
+    print(f"  {'Optimizer':<30s} {'nesterov':>8s} {'best_loss':>10s} {'ppl':>8s} {'wall(min)':>10s} {'FLOPs':>14s}")
+    print("  " + "-" * 86)
     for key, r in sorted(runs.items(), key=lambda x: x[1]['best_loss']):
-        label = NAMES.get(_base_key(key), key)
+        label = _display_name_for_key(key)
         nes_str = 'yes' if r.get('nesterov', True) else 'no'
         wall_min = r['runtime'] / 60 if (r['runtime'] and r['runtime'] > 0) else 0
-        print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}")
+        low, high = compute_flops(
+            12, 768, 512, 32,
+            r.get('iterations', 64000),
+            r['opt'], K=r['K'], ns_steps=r['ns_steps'],
+            srank_alpha=r.get('srank_alpha', 0.0),
+            opt_diag=r.get('opt_diag'),
+        )
+        flops_str = f"{low/1e18:.3f}" if abs(high - low) < 1e-9 else f"{low/1e18:.3f}-{high/1e18:.3f}"
+        print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}  {flops_str:>13s}e18")
 
     fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(16, 7))
 
@@ -346,9 +574,13 @@ def plot_dataset(dataset_name, model_name):
         color = s.get('color', '#333')
         alpha = 1.0 if nesterov_pass else 0.45
         marker = s.get('marker', 'o') if nesterov_pass else 'x'
-        flops = compute_flops(n_layer, n_embd, seq_len, batch_size,
-                              r.get('iterations', 64000),
-                              r['opt'], K=r['K'], ns_steps=r['ns_steps'])
+        flops_lo, flops_hi = compute_flops(n_layer, n_embd, seq_len, batch_size,
+                                           r.get('iterations', 64000),
+                                           r['opt'], K=r['K'], ns_steps=r['ns_steps'],
+                                           srank_alpha=r.get('srank_alpha', 0.0),
+                                           opt_diag=r.get('opt_diag'))
+        # Keep scatter simple: plot the midpoint for adaptive FLOPs ranges.
+        flops = 0.5 * (flops_lo + flops_hi)
         ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
         ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
                     color=color, marker=marker, alpha=alpha, **ec)
@@ -375,6 +607,9 @@ def plot_dataset(dataset_name, model_name):
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Plot saved to {out_path}")
+
+    # Additional simple diagnostics for adaptive LiMuon runs.
+    plot_adaptive_diagnostics(dataset_name, model_name, runs)
 
 
 def discover_available_dataset_model_pairs():

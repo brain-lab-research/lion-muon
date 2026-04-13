@@ -20,7 +20,7 @@ import torch.distributed as dist
 
 from .muon import zeropower_via_newtonschulz5
 from .schedule import cos_inf_schedule, cosine_wsd_decay_schedule, wsd_schedule
-from .utils import srank_wants_muon
+from .utils import estimate_stable_rank
 
 
 class LionMuon(torch.optim.Optimizer):
@@ -87,6 +87,10 @@ class LionMuon(torch.optim.Optimizer):
             self.state[p]["use_muon"] = False
 
         self._step_count = 0
+        self._diag = {
+            "srank_ratios": [],
+            "update_types": [],
+        }
 
         if "WORLD_SIZE" in os.environ:
             self.world_size = int(os.environ["WORLD_SIZE"])
@@ -99,11 +103,33 @@ class LionMuon(torch.optim.Optimizer):
         k = self.param_groups[0]["muon_every_k"]
         return k <= 1 or (self._step_count % k) == 0
 
+    def get_cumulative_diagnostics(self):
+        ratios = self._diag.get("srank_ratios", [])
+        types = self._diag.get("update_types", [])
+        if not ratios:
+            return {}
+        
+        n = len(ratios)
+        mean_srank = sum(ratios) / n if n > 0 else 0.0
+        var_srank = sum((r - mean_srank) ** 2 for r in ratios) / (n - 1) if n > 1 else 0.0
+        ns_count = sum(1 for t in types if t == "NS")
+
+        return {
+            "srank_mean": mean_srank,
+            "srank_var": var_srank,
+            "srank_count": n,
+            "ns_count": ns_count,
+            "srank_ratios": ratios,
+        }
+
     def step(self):
         is_muon_global = self._is_muon_step()
         self._step_count += 1
         srank_alpha = self.param_groups[0].get("srank_alpha", 0.0)
         adaptive = srank_alpha > 0
+        if adaptive:
+            self._diag["srank_ratios"] = []
+            self._diag["update_types"] = []
 
         for group in self.param_groups:
 
@@ -143,8 +169,13 @@ class LionMuon(torch.optim.Optimizer):
                     update = m * beta1 + g * (1 - beta1)
 
                     # Decide muon vs lion for this param
+                    m_rows, n_cols = int(update.size(0)), int(update.size(1))
+                    dmin, dmax = min(m_rows, n_cols), max(m_rows, n_cols)
                     if adaptive:
-                        did_muon = srank_wants_muon(update, srank_alpha)
+                        srank_ratio, srank_sq = estimate_stable_rank(update, power_iters=3)
+                        did_muon = srank_sq <= (srank_alpha * dmin)
+                        self._diag["srank_ratios"].append(float(srank_ratio))
+                        self._diag["update_types"].append("NS" if did_muon else "sign")
                     else:
                         did_muon = is_muon_global
 
@@ -212,6 +243,8 @@ class LionMuon(torch.optim.Optimizer):
                 scale = bias_correction1 / bias_correction2 ** 0.5
                 p.data.mul_(1 - adamw_lr * wd)
                 p.data.add_(g, alpha=-adamw_lr / scale)
+
+
 
 
 class LionMuonScheduler:
