@@ -534,7 +534,7 @@ def plot_dataset(dataset_name, model_name):
         flops_str = f"{low/1e18:.3f}" if abs(high - low) < 1e-9 else f"{low/1e18:.3f}-{high/1e18:.3f}"
         print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}  {flops_str:>13s}e18")
 
-    fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(16, 7))
+    fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(20, 7))
 
     LEFT_LABELS = {'Muon (K=1)', 'LiMuon K=1'}
 
@@ -560,19 +560,22 @@ def plot_dataset(dataset_name, model_name):
 
     ax1.set_yscale('log')
     y_max = 4 if dataset_name == 'wikitext' else 5
-    ax1.set_ylim(None, y_max)
+    y_min_data = min(min(r['losses']) for r in runs.values() if r.get('losses'))
+    y_min = max(1e-6, y_min_data * 0.98)
+    ax1.set_ylim(y_min, y_max)
     ax1.set_xlabel('Iteration', fontsize=16)
     ax1.set_ylabel('Val Loss', fontsize=16)
     ax1.set_title(f'Val Loss vs Iteration — 124M, {ds["title"]} ({model_title})', fontsize=16)
-    ax1.legend(fontsize=9, loc='upper right')
+    ax1.legend(fontsize=12, loc='upper right')
     ax1.grid(True, alpha=0.3, which='both')
     ax1.tick_params(labelsize=13)
 
-    # Plot 2: FLOPs scatter
-    flops_data = []
+    # Plot 2: FLOPs scatter (use legend instead of per-point text labels)
+    legend_handles = []
+    seen_legend = set()
     for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, dynamic_order):
         color = s.get('color', '#333')
-        alpha = 1.0 if nesterov_pass else 0.45
+        alpha = 0.9
         marker = s.get('marker', 'o') if nesterov_pass else 'x'
         flops_lo, flops_hi = compute_flops(n_layer, n_embd, seq_len, batch_size,
                                            r.get('iterations', 64000),
@@ -584,10 +587,15 @@ def plot_dataset(dataset_name, model_name):
         ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
         ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
                     color=color, marker=marker, alpha=alpha, **ec)
-        flops_data.append((label, flops, r['best_loss'], nesterov_pass))
-
-    for label, x, y, nes in flops_data:
-        smart_annotate(ax3, label, x, y, nesterov=nes)
+        legend_text = f"{label}{'' if nesterov_pass else '*'}"
+        if legend_text not in seen_legend:
+            seen_legend.add(legend_text)
+            legend_handles.append(
+                Line2D([0], [0], marker=marker, linestyle='None',
+                       markerfacecolor=color, markeredgecolor='black' if marker != 'x' else color,
+                       markeredgewidth=0.5 if marker != 'x' else 1.0,
+                       alpha=alpha, markersize=9, label=legend_text)
+            )
 
     ax3.set_xlabel('Total Training FLOPs', fontsize=16)
     ax3.set_ylabel('Best Val Loss', fontsize=16)
@@ -595,13 +603,15 @@ def plot_dataset(dataset_name, model_name):
     ax3.grid(True, alpha=0.3)
     ax3.tick_params(labelsize=13)
     ax3.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
+    ax3.legend(handles=legend_handles, loc='center left', bbox_to_anchor=(1.02, 0.5),
+               fontsize=12, title='Run (best loss)', title_fontsize=12, frameon=True)
 
     # Legend note for non-nesterov
     has_nonesterov = any(not v.get('nesterov', True) for v in runs.values())
     if has_nonesterov:
         fig.text(0.5, 0.01, '* = no Nesterov (faded)', ha='center', fontsize=11, style='italic')
 
-    plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 1, 1])
+    plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 0.90, 1])
     os.makedirs(RESULTS_DIR, exist_ok=True)
     out_path = os.path.join(RESULTS_DIR, f'{dataset_name}_{model_name}_results.png')
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
