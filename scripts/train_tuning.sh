@@ -214,6 +214,14 @@ if [ "$RUN_REGULAR" = "1" ]; then
     run "signum_slr${v}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_lr_factor "$SM_LR" --muon_every_k 10000000 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --sign_lr "$v"
   done
 
+  for v in 1e-4 3e-4 1e-3 3e-3 1e-2 3e-2; do
+    run "muon_fixed_lr${v}" --opt lion_muon --lr "$SM_ADAMW_LR" --muon_every_k 1 --beta1 0.9 --beta2 0.9 --muon_lr_factor "$v"
+  done
+
+  for v in 1e-4 3e-4 1e-3 3e-3 1e-2 3e-2; do
+    run "signum_fixed_slr${v}" --opt lion_muon --lr "$SM_ADAMW_LR" --muon_lr_factor "$SM_LR" --muon_every_k 10000000 --beta1 0.9 --beta2 0.9 --sign_lr "$v"
+  done
+
   for lr in 1e-3 2e-3 3e-3 5e-3 7e-3; do
     for slr in 1e-6 2e-6 5e-6 1e-5 2e-5 5e-5 1e-4; do
       run "signmuon_k2_lr${lr}_slr${slr}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 2 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
@@ -235,6 +243,31 @@ if [ "$RUN_REGULAR" = "1" ]; then
   for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
     for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
       run "signmuon_k100_lr${lr}_slr${slr}" --opt sign_muon --lr "$SM_ADAMW_LR" --muon_every_k 100 --cheap_mode sign --sign_scaling none $SIGNMUON_SHARED --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
+
+  # SignMuon-fixed: implemented through LiMuon dynamics with beta1=beta2=0.9
+  for lr in 1e-3 2e-3 3e-3 5e-3 7e-3; do
+    for slr in 1e-6 2e-6 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_fixed_k2_lr${lr}_slr${slr}" --opt lion_muon --lr "$SM_ADAMW_LR" --muon_every_k 2 --beta1 0.9 --beta2 0.9 --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
+
+  for lr in 1e-3 2e-3 3e-3 5e-3 7e-3; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_fixed_k5_lr${lr}_slr${slr}" --opt lion_muon --lr "$SM_ADAMW_LR" --muon_every_k 5 --beta1 0.9 --beta2 0.9 --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
+
+  for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_fixed_k20_lr${lr}_slr${slr}" --opt lion_muon --lr "$SM_ADAMW_LR" --muon_every_k 20 --beta1 0.9 --beta2 0.9 --muon_lr_factor "$lr" --sign_lr "$slr"
+    done
+  done
+
+  for lr in 3e-3 5e-3 7e-3 1e-2 2e-2; do
+    for slr in 5e-6 1e-5 2e-5 5e-5 1e-4; do
+      run "signmuon_fixed_k100_lr${lr}_slr${slr}" --opt lion_muon --lr "$SM_ADAMW_LR" --muon_every_k 100 --beta1 0.9 --beta2 0.9 --muon_lr_factor "$lr" --sign_lr "$slr"
     done
   done
 

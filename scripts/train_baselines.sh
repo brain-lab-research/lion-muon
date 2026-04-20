@@ -130,6 +130,14 @@ SM_K5_LR=3e-3;   SM_K5_SLR=2e-5
 SM_K20_LR=1e-2;  SM_K20_SLR=5e-5
 SM_K100_LR=1e-2; SM_K100_SLR=5e-5
 
+# SignMuon-fixed (LiMuon dynamics with beta1=beta2=0.9) tuned defaults.
+SMF_K2_LR=2e-3;   SMF_K2_SLR=5e-5
+SMF_K5_LR=3e-3;   SMF_K5_SLR=5e-5
+SMF_K20_LR=1e-2;  SMF_K20_SLR=5e-5
+SMF_K100_LR=1e-2; SMF_K100_SLR=1e-4
+SMF_MUON_LR=1e-3
+SMF_SIGNUM_SLR=1e-4
+
 LMK1_LR=7e-4
 LM_K2_LR=1e-3;   LM_K2_SLR=5e-5
 LM_K5_LR=2e-3;   LM_K5_SLR=5e-5
@@ -210,6 +218,24 @@ for K in 2 5 20 100; do
     --sign_lr $MUON_K_SLR --muon_every_k $K --cheap_mode sign --sign_scaling none \
     --momentum $SM_MOM --nesterov True
 done
+
+# SignMuon-fixed variants implemented with LiMuon dynamics
+# (beta1=beta2=0.9), using dedicated tuned SMF LRs.
+for K in 2 5 20 100; do
+  eval MUON_K_LR=\$SMF_K${K}_LR
+  eval MUON_K_SLR=\$SMF_K${K}_SLR
+  run "signmuon_fixed_k${K}" \
+    --opt lion_muon --lr $SM_ADAMW_LR --muon_lr_factor $MUON_K_LR \
+    --sign_lr $MUON_K_SLR --muon_every_k $K --beta1 0.9 --beta2 0.9
+done
+
+run "muon_fixed" \
+  --opt lion_muon --lr $SM_ADAMW_LR --muon_lr_factor $SMF_MUON_LR \
+  --muon_every_k 1 --beta1 0.9 --beta2 0.9
+
+run "signum_fixed" \
+  --opt lion_muon --lr $SM_ADAMW_LR --muon_lr_factor $SMF_MUON_LR --sign_lr $SMF_SIGNUM_SLR \
+  --muon_every_k 10000000 --beta1 0.9 --beta2 0.9
 
 run "signum" \
   --opt sign_muon --lr $SM_ADAMW_LR --sign_lr $SIGNUM_LR \
