@@ -50,27 +50,27 @@ MODELS = {'base', 'llama'}
 # Display names: experiment key -> label
 # Conceptual families:
 #   SignMuon family (SGD momentum): Muon(K=1) -> SignMuon K=2,5,20,100 -> Signum(K=inf)
-#   LiMuon family (dual-EMA):      LiMuon K=1 -> K=2,5,20,100 -> Lion(K=inf)
+#   LionMuon family (dual-EMA):      LionMuon K=1 -> K=2,5,20,100 -> Lion(K=inf)
 #   AdamW: standalone baseline
 NAMES = {
-    'adamw':          'AdamW',
-    'muon_fixed':     'Muon (K=1)',
+    'adamw':                'AdamW',
+    'muon_fixed':           'Muon (K=1)',
     'signmuon_fixed_k2':    'SignMuon K=2',
     'signmuon_fixed_k5':    'SignMuon K=5',
     'signmuon_fixed_k20':   'SignMuon K=20',
     'signmuon_fixed_k100':  'SignMuon K=100',
-    'signum_fixed':   'Signum (K=\u221e)',
-    'lionmuon_k1':    'LiMuon K=1',
-    'lionmuon_k2':    'LiMuon K=2',
-    'lionmuon_k5':    'LiMuon K=5',
-    'lionmuon_k20':   'LiMuon K=20',
-    'lionmuon_k100':  'LiMuon K=100',
-    'lion':           'Lion (K=\u221e)',
+    'signum_fixed':         'Signum (K=\u221e)',
+    'lionmuon_k1':          'LionMuon K=1',
+    'lionmuon_k2':          'LionMuon K=2',
+    'lionmuon_k5':          'LionMuon K=5',
+    'lionmuon_k20':         'LionMuon K=20',
+    'lionmuon_k100':        'LionMuon K=100',
+    'lion':                 'Lion (K=\u221e)',
 }
 
 # --- Visual style ---
 # SignMuon family: red gradient, darker = lower K (more NS), triangle marker
-# LiMuon family: blue gradient, darker = lower K, circle marker
+# LionMuon family: blue gradient, darker = lower K, circle marker
 # AdamW: gray, square marker
 # Darker color = more frequent NS steps (lower K)
 
@@ -83,16 +83,16 @@ STYLE = {
     'SignMuon K=20':      {'color': '#e87070', 'ls': ':',        'lw': 2.2, 'marker': '^'},
     'SignMuon K=100':     {'color': '#f0a0a0', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': '^'},
     'Signum (K=\u221e)':  {'color': '#f5c8c8', 'ls': (0,(5,10)), 'lw': 2.2, 'marker': '^'},
-    # LiMuon family: dark blue (K=1) -> light blue (K=inf)
-    'LiMuon K=1':        {'color': '#00008b', 'ls': '-',        'lw': 2.2, 'marker': 'o'},
-    'LiMuon K=2':        {'color': '#1144cc', 'ls': '--',       'lw': 2.2, 'marker': 'o'},
-    'LiMuon K=5':        {'color': '#3377ee', 'ls': '-.',       'lw': 2.2, 'marker': 'o'},
-    'LiMuon K=20':       {'color': '#6699ee', 'ls': ':',        'lw': 2.2, 'marker': 'o'},
-    'LiMuon K=100':      {'color': '#99bbff', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': 'o'},
+    # LionMuon family: dark blue (K=1) -> light blue (K=inf)
+    'LionMuon K=1':        {'color': '#00008b', 'ls': '-',        'lw': 2.2, 'marker': 'o'},
+    'LionMuon K=2':        {'color': '#1144cc', 'ls': '--',       'lw': 2.2, 'marker': 'o'},
+    'LionMuon K=5':        {'color': '#3377ee', 'ls': '-.',       'lw': 2.2, 'marker': 'o'},
+    'LionMuon K=20':       {'color': '#6699ee', 'ls': ':',        'lw': 2.2, 'marker': 'o'},
+    'LionMuon K=100':      {'color': '#99bbff', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': 'o'},
     'Lion (K=\u221e)':   {'color': '#c8d8f5', 'ls': (0,(5,10)), 'lw': 2.2, 'marker': 'o'},
 }
 
-# Plot order: SignMuon family high-K first (behind), then LiMuon family
+# Plot order: SignMuon family high-K first (behind), then LionMuon family
 ORDER = [
     'adamw',
     'signum_fixed', 'signmuon_fixed_k100', 'signmuon_fixed_k20', 'signmuon_fixed_k5', 'signmuon_fixed_k2', 'muon_fixed',
@@ -356,7 +356,7 @@ def plot_dataset(dataset_name, model_name):
 
     fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(20, 7))
 
-    LEFT_LABELS = {'Muon (K=1)', 'LiMuon K=1'}
+    LEFT_LABELS = {'Muon (K=1)', 'LionMuon K=1'}
 
     def smart_annotate(ax, label, x, y, nesterov=True, fontsize=10):
         text = label if nesterov else f"{label}*"
@@ -379,7 +379,8 @@ def plot_dataset(dataset_name, model_name):
                  color=color, ls=ls, lw=lw, alpha=alpha)
 
     ax1.set_yscale('log')
-    y_max = 4.5
+    # WikiText converges to a narrower range; use a tighter y-axis ceiling.
+    y_max = 3.5 if dataset_name == 'wikitext' else 4.5
     y_min_data = min(min(r['losses']) for r in runs.values() if r.get('losses'))
     y_min = max(1e-6, y_min_data * 0.98)
     ax1.set_ylim(y_min, y_max)
@@ -404,7 +405,9 @@ def plot_dataset(dataset_name, model_name):
         # Keep scatter simple: plot the midpoint for adaptive FLOPs ranges.
         flops = 0.5 * (flops_lo + flops_hi)
         ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
-        ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
+        # Triangles (SignMuon family) drawn above circles (LionMuon) so both stay visible when overlapping.
+        z = 6 if marker == '^' else 5
+        ax3.scatter(flops, r['best_loss'], s=180, zorder=z,
                     color=color, marker=marker, alpha=alpha, **ec)
         legend_text = f"{label}{'' if nesterov_pass else '*'}"
         if legend_text not in seen_legend:

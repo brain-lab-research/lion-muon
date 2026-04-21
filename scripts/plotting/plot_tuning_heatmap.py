@@ -58,10 +58,10 @@ def plot_heatmap(exps_dir: Path, out_path: Path):
         "signmuon_fixed_k5": "SignMuon k=5",
         "signmuon_fixed_k20": "SignMuon k=20",
         "signmuon_fixed_k100": "SignMuon k=100",
-        "lionmuon_k2": "LiMuon k=2",
-        "lionmuon_k5": "LiMuon k=5",
-        "lionmuon_k20": "LiMuon k=20",
-        "lionmuon_k100": "LiMuon k=100",
+        "lionmuon_k2": "LionMuon k=2",
+        "lionmuon_k5": "LionMuon k=5",
+        "lionmuon_k20": "LionMuon k=20",
+        "lionmuon_k100": "LionMuon k=100",
     }
 
     data = {}
