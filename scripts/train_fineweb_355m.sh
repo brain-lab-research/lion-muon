@@ -9,7 +9,7 @@ cd "$REPO_ROOT"
 
 PYTHON=/data/users/arman/miniconda3/envs/optim/bin/python
 
-# Setup for 410M model on FineWeb
+# Setup for 355M model on FineWeb
 # ~8.2B tokens, Sequence Length 1024
 DATASETS_DIR=${DATASETS_DIR:-/data/datasets/}
 DATASET="fineweb"
@@ -29,18 +29,18 @@ N_HEAD=16
 N_EMBD=1024
 SEQ_LEN=1024
 
-EXPS_DIR="./exps_410m"
-EXP_PREFIX="fw_base_410m_"
+EXPS_DIR="./exps_355m"
+EXP_PREFIX="fw_base_355m_"
 
 run() {
   local name=$1; shift
   local exp_name="${EXP_PREFIX}${name}"
-  
+
   if [ -f "${EXPS_DIR}/${exp_name}/summary.json" ]; then
     echo "[SKIP] $exp_name already completed."
     return
   fi
-  
+
   echo "[RUN] $exp_name"
   $PYTHON ./src/main.py \
     --dataset $DATASET \
@@ -68,40 +68,40 @@ run() {
 # --- Algorithms ---
 # LRs scaled down by 0.75 from 124M based on muP heuristic (768/1024)
 
-# 1. AdamW
 run "adamw" \
-  --opt adamw --lr 3.75e-4 --beta1 0.8 --beta2 0.999
+  --opt adamw --lr 0.005 --beta1 0.8 --beta2 0.999
 
-# 2. Muon
 run "muon" \
   --opt sign_muon --lr 7.5e-4 --muon_lr_factor 7.5e-4 \
   --muon_every_k 1 --cheap_mode sign --momentum 0.95 --nesterov True
 
-# 3. Signum
 run "signum" \
   --opt sign_muon --lr 7.5e-4 --sign_lr 3.75e-5 \
   --muon_every_k 10000000 --cheap_mode sign --sign_scaling none \
   --momentum 0.95 --nesterov True
 
-# 4. SignMuon (k=2)
-run "signmuon_k2" \
-  --opt sign_muon --lr 7.5e-4 --muon_lr_factor 1.5e-3 \
-  --sign_lr 1.5e-5 --muon_every_k 2 --cheap_mode sign --sign_scaling none \
-  --momentum 0.95 --nesterov True
-
-# 5. LionMuon (k=2)
-run "lionmuon_k2" \
-  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 7.5e-4 \
-  --sign_lr 3.75e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.99
-
-# 6. SignMuon-fixed (k=2)
-run "signmuon_fixed_k2" \
-  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 1.5e-3 \
-  --sign_lr 3.75e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.9
-
-# 7. Lion
 run "lion" \
   --opt lion_muon --lr 7.5e-4 --muon_lr_factor 5.25e-3 \
   --sign_lr 3.75e-5 --muon_every_k 10000000 --beta1 0.9 --beta2 0.99
 
-echo "All jobs finished!"
+run "lionmuon_k1" \
+  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 5.25e-4 \
+  --muon_every_k 1 --beta1 0.9 --beta2 0.99
+
+run "lionmuon_k2" \
+  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 7.5e-4 \
+  --sign_lr 3.75e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.99
+
+run "lionmuon_k5" \
+  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 1.5e-3 \
+  --sign_lr 3.75e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.99
+
+run "signmuon_fixed_k2" \
+  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 1.5e-3 \
+  --sign_lr 3.75e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.9
+
+run "signmuon_fixed_k5" \
+  --opt lion_muon --lr 7.5e-4 --muon_lr_factor 2.25e-3 \
+  --sign_lr 3.75e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.9
+
+echo "Script finished!"
