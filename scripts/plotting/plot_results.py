@@ -108,6 +108,16 @@ ALLOWED_BASE_KEYS = {
     'lion',
 }
 
+# Per-setup val-loss plots only show a subset (too many curves otherwise).
+ALLOWED_BASE_KEYS_VAL_LOSS = {
+    'adamw',
+    'muon_fixed',
+    'signmuon_fixed_k2',
+    'signum_fixed',
+    'lionmuon_k1', 'lionmuon_k2',
+    'lion',
+}
+
 def parse_log(logfile):
     pat = re.compile(r'>Eval: Iter=(\d+).*?val_loss=([\d.]+)')
     iters, losses = [], []
@@ -332,7 +342,7 @@ def plot_dataset(dataset_name, model_name):
 
     runs = {
         k: v for k, v in runs.items()
-        if not _is_excluded_run_key(k) and _base_key(k) in ALLOWED_BASE_KEYS
+        if not _is_excluded_run_key(k) and _base_key(k) in ALLOWED_BASE_KEYS_VAL_LOSS
     }
 
     dynamic_order = ORDER
@@ -342,7 +352,7 @@ def plot_dataset(dataset_name, model_name):
     print(f"  {'Optimizer':<30s} {'nesterov':>8s} {'best_loss':>10s} {'ppl':>8s} {'wall(min)':>10s} {'FLOPs':>14s}")
     print("  " + "-" * 86)
     for key, r in sorted(runs.items(), key=lambda x: x[1]['best_loss']):
-        label = _display_name_for_key(key)
+        label = _display_name_for_key(key).replace('∞', 'inf')
         nes_str = 'yes' if r.get('nesterov', True) else 'no'
         wall_min = r['runtime'] / 60 if (r['runtime'] and r['runtime'] > 0) else 0
         low, high = compute_flops(
@@ -354,7 +364,7 @@ def plot_dataset(dataset_name, model_name):
         flops_str = f"{low/1e18:.3f}" if abs(high - low) < 1e-9 else f"{low/1e18:.3f}-{high/1e18:.3f}"
         print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}  {flops_str:>13s}e18")
 
-    fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(20, 7))
+    fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(13, 5))
 
     LEFT_LABELS = {'Muon (K=1)', 'LionMuon K=1'}
 
@@ -384,61 +394,223 @@ def plot_dataset(dataset_name, model_name):
     y_min_data = min(min(r['losses']) for r in runs.values() if r.get('losses'))
     y_min = max(1e-6, y_min_data * 0.98)
     ax1.set_ylim(y_min, y_max)
-    ax1.set_xlabel('Iteration', fontsize=16)
-    ax1.set_ylabel('Val Loss', fontsize=16)
+    ax1.set_xlabel('Iteration', fontsize=15)
+    ax1.set_ylabel('Val Loss', fontsize=15)
     ax1.set_title(f'Val Loss vs Iteration — 124M, {ds["title"]} ({model_title})', fontsize=16)
     ax1.legend(fontsize=12, loc='upper right')
     ax1.grid(True, alpha=0.3, which='both')
     ax1.tick_params(labelsize=13)
 
-    # Plot 2: FLOPs scatter (use legend instead of per-point text labels)
-    legend_handles = []
-    seen_legend = set()
+    # Plot 2: val loss vs cumulative training FLOPs (trajectory curve)
     for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, dynamic_order):
         color = s.get('color', '#333')
-        alpha = 0.9
-        marker = s.get('marker', 'o') if nesterov_pass else 'x'
+        alpha = 1.0 if nesterov_pass else 0.45
+        lw = s.get('lw', 2) if nesterov_pass else s.get('lw', 2) * 0.8
+        ls = s.get('ls', '-') if nesterov_pass else (0, (3, 2))
         flops_lo, flops_hi = compute_flops(n_layer, n_embd, seq_len, batch_size,
                                            r.get('iterations', 64000),
                                            r['opt'], K=r['K'], ns_steps=r['ns_steps'],
                                            opt_diag=r.get('opt_diag'))
-        # Keep scatter simple: plot the midpoint for adaptive FLOPs ranges.
-        flops = 0.5 * (flops_lo + flops_hi)
-        ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
-        # Triangles (SignMuon family) drawn above circles (LionMuon) so both stay visible when overlapping.
-        z = 6 if marker == '^' else 5
-        ax3.scatter(flops, r['best_loss'], s=180, zorder=z,
-                    color=color, marker=marker, alpha=alpha, **ec)
-        legend_text = f"{label}{'' if nesterov_pass else '*'}"
-        if legend_text not in seen_legend:
-            seen_legend.add(legend_text)
-            legend_handles.append(
-                Line2D([0], [0], marker=marker, linestyle='None',
-                       markerfacecolor=color, markeredgecolor='black' if marker != 'x' else color,
-                       markeredgewidth=0.5 if marker != 'x' else 1.0,
-                       alpha=alpha, markersize=9, label=legend_text)
-            )
+        total_flops = 0.5 * (flops_lo + flops_hi)
+        total_iters = r.get('iterations', 64000) or (max(r['iters']) if r['iters'] else 1)
+        # Linear mapping iteration -> cumulative FLOPs (per-step cost ~ constant).
+        flops_at_iter = [total_flops * (it / total_iters) for it in r['iters']]
+        legend_label = f"{label} ({r['best_loss']:.3f})" if nesterov_pass else f"{label}* no-Nes ({r['best_loss']:.3f})"
+        ax3.plot(flops_at_iter, r['losses'], label=legend_label,
+                 color=color, ls=ls, lw=lw, alpha=alpha)
 
-    ax3.set_xlabel('Total Training FLOPs', fontsize=16)
-    ax3.set_ylabel('Best Val Loss', fontsize=16)
-    ax3.set_title('Best Val Loss vs FLOPs', fontsize=16)
-    ax3.grid(True, alpha=0.3)
+    ax3.set_yscale('log')
+    ax3.set_ylim(y_min, y_max)
+    ax3.set_xlabel('Training FLOPs', fontsize=15)
+    ax3.set_ylabel('Val Loss', fontsize=15)
+    ax3.set_title(f'Val Loss vs FLOPs — 124M, {ds["title"]} ({model_title})', fontsize=16)
+    ax3.legend(fontsize=12, loc='upper right')
+    ax3.grid(True, alpha=0.3, which='both')
     ax3.tick_params(labelsize=13)
     ax3.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
-    ax3.legend(handles=legend_handles, loc='center left', bbox_to_anchor=(1.02, 0.5),
-               fontsize=12, title='Run (best loss)', title_fontsize=12, frameon=True)
 
     # Legend note for non-nesterov
     has_nonesterov = any(not v.get('nesterov', True) for v in runs.values())
     if has_nonesterov:
         fig.text(0.5, 0.01, '* = no Nesterov (faded)', ha='center', fontsize=11, style='italic')
 
-    plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 0.90, 1])
+    plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 1, 1])
     os.makedirs(RESULTS_DIR, exist_ok=True)
     out_path = os.path.join(RESULTS_DIR, f'{dataset_name}_{model_name}_results.png')
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Plot saved to {out_path}")
+
+def plot_combined_flops_loss(save_name='combined_flops_loss.png'):
+    """Generate a 2x3 grid (2 architectures x 3 datasets) of best val loss
+    vs FLOPs plots, with a single shared legend."""
+    dataset_order = ['fineweb', 'slimpajama', 'wikitext']
+    model_order = ['base', 'llama']
+    n_layer, n_embd, seq_len, batch_size = 12, 768, 512, 32
+
+    fig, axes = plt.subplots(len(model_order), len(dataset_order),
+                             figsize=(13, 7), constrained_layout=False)
+
+    legend_handles = []
+    seen_legend = set()
+
+    for i, m_name in enumerate(model_order):
+        for j, ds_name in enumerate(dataset_order):
+            ax = axes[i, j]
+            ds = DATASETS.get(ds_name, {'wandb_project': None, 'prefix': '', 'title': ds_name})
+
+            runs = {}
+            if ds['wandb_project']:
+                runs = get_runs(ds['wandb_project'], ds['prefix'])
+            if not runs:
+                local_exps = os.path.join(LOCAL_BASE_DIR, 'exps')
+                auto_prefix = get_local_prefix(ds_name, m_name)
+                runs = get_local_runs(local_exps, auto_prefix, model_name=m_name)
+                if not runs:
+                    legacy_prefix = get_legacy_local_prefix(ds_name)
+                    runs = get_local_runs(local_exps, legacy_prefix, model_name=m_name)
+
+            runs = {
+                k: v for k, v in runs.items()
+                if not _is_excluded_run_key(k) and _base_key(k) in ALLOWED_BASE_KEYS
+            }
+            if not runs:
+                ax.text(0.5, 0.5, '(no runs)', transform=ax.transAxes,
+                        ha='center', va='center', fontsize=14, color='#888')
+                ax.set_title(f"{ds['title']} / {'GPT-2' if m_name == 'base' else 'LLaMA'}", fontsize=16)
+                continue
+
+            for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, ORDER):
+                color = s.get('color', '#333')
+                marker = s.get('marker', 'o') if nesterov_pass else 'x'
+                flops_lo, flops_hi = compute_flops(n_layer, n_embd, seq_len, batch_size,
+                                                   r.get('iterations', 64000),
+                                                   r['opt'], K=r['K'], ns_steps=r['ns_steps'],
+                                                   opt_diag=r.get('opt_diag'))
+                flops = 0.5 * (flops_lo + flops_hi)
+                ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
+                z = 6 if marker == '^' else 5
+                ax.scatter(flops, r['best_loss'], s=90, zorder=z,
+                           color=color, marker=marker, alpha=0.9, **ec)
+
+                legend_text = f"{label}{'' if nesterov_pass else '*'}"
+                if legend_text not in seen_legend:
+                    seen_legend.add(legend_text)
+                    legend_handles.append(
+                        Line2D([0], [0], marker=marker, linestyle='None',
+                               markerfacecolor=color,
+                               markeredgecolor='black' if marker != 'x' else color,
+                               markeredgewidth=0.5 if marker != 'x' else 1.0,
+                               alpha=0.9, markersize=10, label=legend_text)
+                    )
+
+            model_title = 'GPT-2' if m_name == 'base' else 'LLaMA'
+            ax.set_title(f"{ds['title']} / {model_title}", fontsize=16)
+            ax.grid(True, alpha=0.3)
+            ax.tick_params(labelsize=13)
+            ax.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
+            if i == len(model_order) - 1:
+                ax.set_xlabel('Training FLOPs', fontsize=15)
+            if j == 0:
+                ax.set_ylabel('Best Val Loss', fontsize=15)
+
+    # Shared legend on the right.
+    fig.legend(handles=legend_handles, loc='center left',
+               bbox_to_anchor=(0.86, 0.5), fontsize=13,
+               title='Optimizer', title_fontsize=14, frameon=True)
+
+    fig.tight_layout(rect=[0, 0, 0.85, 1.0])
+
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    out_path = os.path.join(RESULTS_DIR, save_name)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Combined plot saved to {out_path}")
+
+
+def plot_355m(save_name='fineweb_base_355m_results.png'):
+    """One figure with two panels for the 355M FineWeb / GPT-2 sweep:
+    (left) val loss vs iteration; (right) best val loss vs total training FLOPs.
+    """
+    exps_dir = os.path.join(LOCAL_BASE_DIR, 'exps_355m')
+    prefix = 'fw_base_355m_'
+    if not os.path.isdir(exps_dir):
+        print(f"No 355M exps directory at {exps_dir}")
+        return
+
+    # 355M architecture (matches summary.json args).
+    n_layer, n_embd, seq_len = 24, 1024, 1024
+    eff_batch = 64 * 8  # batch_size * acc_steps; tokens-per-iteration accounting
+
+    runs = get_local_runs(exps_dir, prefix, model_name='base')
+    # 355M folder uses bare 'muon' / 'signum' instead of '_fixed' suffix; remap.
+    rename = {'muon': 'muon_fixed', 'signum': 'signum_fixed'}
+    runs = {rename.get(k, k): v for k, v in runs.items()
+            if not _is_excluded_run_key(k)}
+    if not runs:
+        print(f"No 355M runs found in {exps_dir}")
+        return
+
+    print("\nFineWeb / GPT-2 355M results (sorted by best val_loss):")
+    print(f"  {'Optimizer':<22s} {'best_loss':>10s} {'ppl':>8s} {'FLOPs':>14s}")
+    print("  " + "-" * 60)
+    for key, r in sorted(runs.items(), key=lambda x: x[1]['best_loss']):
+        label = _display_name_for_key(key).replace('∞', 'inf')
+        flops_lo, _ = compute_flops(n_layer, n_embd, seq_len, eff_batch,
+                                     r.get('iterations', 15650),
+                                     r['opt'], K=r['K'], ns_steps=r['ns_steps'],
+                                     opt_diag=r.get('opt_diag'))
+        print(f"  {label:<22s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f}  {flops_lo/1e18:>10.3f}e18")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    # Left panel: val loss vs iteration.
+    for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, ORDER):
+        color = s.get('color', '#333')
+        lw = s.get('lw', 2)
+        ls = s.get('ls', '-')
+        legend_label = f"{label} ({r['best_loss']:.3f})"
+        ax1.plot(r['iters'], r['losses'], label=legend_label,
+                 color=color, ls=ls, lw=lw)
+    ax1.set_yscale('log')
+    y_min_data = min(min(r['losses']) for r in runs.values() if r.get('losses'))
+    ax1.set_ylim(max(1e-6, y_min_data * 0.98), 5.0)
+    ax1.set_xlabel('Iteration', fontsize=15)
+    ax1.set_ylabel('Val Loss', fontsize=15)
+    ax1.set_title('Val Loss vs Iteration — 355M, FineWeb (GPT-2)', fontsize=16)
+    ax1.legend(fontsize=12, loc='upper right')
+    ax1.grid(True, alpha=0.3, which='both')
+    ax1.tick_params(labelsize=13)
+
+    # Right panel: best val loss vs total training FLOPs (scatter).
+    for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, ORDER):
+        color = s.get('color', '#333')
+        marker = s.get('marker', 'o')
+        flops_lo, flops_hi = compute_flops(n_layer, n_embd, seq_len, eff_batch,
+                                           r.get('iterations', 15650),
+                                           r['opt'], K=r['K'], ns_steps=r['ns_steps'],
+                                           opt_diag=r.get('opt_diag'))
+        flops = 0.5 * (flops_lo + flops_hi)
+        z = 6 if marker == '^' else 5
+        ax2.scatter(flops, r['best_loss'], s=90, zorder=z,
+                    color=color, marker=marker, alpha=0.9,
+                    edgecolors='black', linewidths=0.6,
+                    label=f"{label} ({r['best_loss']:.3f})")
+    ax2.set_xlabel('Training FLOPs', fontsize=15)
+    ax2.set_ylabel('Best Val Loss', fontsize=15)
+    ax2.set_title('Best Val Loss vs FLOPs — 355M, FineWeb (GPT-2)', fontsize=16)
+    ax2.legend(fontsize=12, loc='upper right')
+    ax2.grid(True, alpha=0.3)
+    ax2.tick_params(labelsize=13)
+    ax2.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
+
+    plt.tight_layout()
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    out_path = os.path.join(RESULTS_DIR, save_name)
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Plot saved to {out_path}")
+
 
 def discover_available_dataset_model_pairs():
     """Discover (dataset, model) pairs from local summary files in exps/."""
@@ -474,6 +646,16 @@ def main():
         for ds, model_name in pairs:
             print(f"  - {ds} {model_name}")
             plot_dataset(ds, model_name)
+        plot_combined_flops_loss()
+        plot_355m()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == 'combined':
+        plot_combined_flops_loss()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == '355m':
+        plot_355m()
         return
 
     if len(sys.argv) < 3:

@@ -80,7 +80,7 @@ def plot_heatmap(exps_dir: Path, out_path: Path):
     vmin = float(np.min(all_vals))
     vmax = float(np.max(all_vals))
 
-    fig, axes = plt.subplots(2, 4, figsize=(20, 9), sharey=False, constrained_layout=True)
+    fig, axes = plt.subplots(2, 4, figsize=(14, 6.5), sharey=False, constrained_layout=True)
     im_for_cbar = None
     for ax, prefix in zip(axes.ravel(), prefixes):
         if prefix not in data:
@@ -90,17 +90,17 @@ def plot_heatmap(exps_dir: Path, out_path: Path):
         im = ax.imshow(z, origin="lower", aspect="auto", cmap="RdYlGn_r", vmin=vmin, vmax=vmax)
         im_for_cbar = im
         ax.set_xticks(np.arange(len(lrs)))
-        ax.set_xticklabels(lrs, rotation=35, ha="right", fontsize=15)
+        ax.set_xticklabels(lrs, rotation=35, ha="right", fontsize=12)
         ax.set_yticks(np.arange(len(slrs)))
-        ax.set_yticklabels(slrs, fontsize=15)
-        ax.set_xlabel("lr", fontsize=17)
-        ax.set_ylabel("sign_lr", fontsize=17)
-        ax.set_title(labels[prefix], fontsize=19)
+        ax.set_yticklabels(slrs, fontsize=12)
+        ax.set_xlabel("lr", fontsize=14)
+        ax.set_ylabel("sign_lr", fontsize=14)
+        ax.set_title(labels[prefix], fontsize=15)
 
     if im_for_cbar is not None:
         cbar = fig.colorbar(im_for_cbar, ax=axes.ravel().tolist(), pad=0.01, shrink=0.92)
-        cbar.set_label("best val_loss", fontsize=17)
-        cbar.ax.tick_params(labelsize=15)
+        cbar.set_label("best val_loss", fontsize=14)
+        cbar.ax.tick_params(labelsize=12)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=180)
