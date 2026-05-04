@@ -2,6 +2,7 @@
 src/data/datasets/
 wandb/
 paper/
+*_old/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
