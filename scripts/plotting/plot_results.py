@@ -20,7 +20,6 @@ import yaml
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 BASE_DIR = '/home/arman/llm-baselines'
 LOCAL_BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '')
@@ -50,7 +49,7 @@ MODELS = {'base', 'llama'}
 # Display names: experiment key -> label
 # Conceptual families:
 #   SignMuon family (SGD momentum): Muon(K=1) -> SignMuon K=2,5,20,100 -> Signum(K=inf)
-#   LiMuon family (dual-EMA):      LiMuon K=1 -> K=2,5,20,100 -> Lion(K=inf)
+#   LionMuon family (dual-EMA):      LionMuon K=1 -> K=2,5,20,100 -> Lion(K=inf)
 #   AdamW: standalone baseline
 NAMES = {
     'adamw':          'AdamW',
@@ -60,17 +59,17 @@ NAMES = {
     'signmuon_fixed_k20':   'SignMuon P=20',
     'signmuon_fixed_k100':  'SignMuon P=100',
     'signum_fixed':   'Signum (P=\u221e)',
-    'lionmuon_k1':    'LiMuon P=1',
-    'lionmuon_k2':    'LiMuon P=2',
-    'lionmuon_k5':    'LiMuon P=5',
-    'lionmuon_k20':   'LiMuon P=20',
-    'lionmuon_k100':  'LiMuon P=100',
+    'lionmuon_k1':    'LionMuon P=1',
+    'lionmuon_k2':    'LionMuon P=2',
+    'lionmuon_k5':    'LionMuon P=5',
+    'lionmuon_k20':   'LionMuon P=20',
+    'lionmuon_k100':  'LionMuon P=100',
     'lion':           'Lion (P=\u221e)',
 }
 
 # --- Visual style ---
 # SignMuon family: red gradient, darker = lower K (more NS), triangle marker
-# LiMuon family: blue gradient, darker = lower K, circle marker
+# LionMuon family: blue gradient, darker = lower K, circle marker
 # AdamW: gray, square marker
 # Darker color = more frequent NS steps (lower K)
 
@@ -83,16 +82,16 @@ STYLE = {
     'SignMuon P=20':      {'color': '#e87070', 'ls': ':',        'lw': 2.2, 'marker': '^'},
     'SignMuon P=100':     {'color': '#f0a0a0', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': '^'},
     'Signum (P=\u221e)':  {'color': '#f5c8c8', 'ls': (0,(5,10)), 'lw': 2.2, 'marker': '^'},
-    # LiMuon family: dark blue (K=1) -> light blue (K=inf)
-    'LiMuon P=1':        {'color': '#00008b', 'ls': '-',        'lw': 2.2, 'marker': 'o'},
-    'LiMuon P=2':        {'color': '#1144cc', 'ls': '--',       'lw': 2.2, 'marker': 'o'},
-    'LiMuon P=5':        {'color': '#3377ee', 'ls': '-.',       'lw': 2.2, 'marker': 'o'},
-    'LiMuon P=20':       {'color': '#6699ee', 'ls': ':',        'lw': 2.2, 'marker': 'o'},
-    'LiMuon P=100':      {'color': '#99bbff', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': 'o'},
+    # LionMuon family: dark blue (K=1) -> light blue (K=inf)
+    'LionMuon P=1':        {'color': '#00008b', 'ls': '-',        'lw': 2.2, 'marker': 'o'},
+    'LionMuon P=2':        {'color': '#1144cc', 'ls': '--',       'lw': 2.2, 'marker': 'o'},
+    'LionMuon P=5':        {'color': '#3377ee', 'ls': '-.',       'lw': 2.2, 'marker': 'o'},
+    'LionMuon P=20':       {'color': '#6699ee', 'ls': ':',        'lw': 2.2, 'marker': 'o'},
+    'LionMuon P=100':      {'color': '#99bbff', 'ls': (0,(1,3)),  'lw': 2.2, 'marker': 'o'},
     'Lion (P=\u221e)':   {'color': '#c8d8f5', 'ls': (0,(5,10)), 'lw': 2.2, 'marker': 'o'},
 }
 
-# Plot order: SignMuon family high-K first (behind), then LiMuon family
+# Plot order: SignMuon family high-K first (behind), then LionMuon family
 ORDER = [
     'adamw',
     'signum_fixed', 'signmuon_fixed_k100', 'signmuon_fixed_k20', 'signmuon_fixed_k5', 'signmuon_fixed_k2', 'muon_fixed',
@@ -330,7 +329,7 @@ def _normalize_run_keys(runs):
 
 
 
-def plot_dataset(dataset_name, model_name):
+def plot_dataset(dataset_name, model_name, scale=None):
     ds = DATASETS.get(dataset_name, {
         'wandb_project': None,
         'prefix': '',
@@ -344,24 +343,28 @@ def plot_dataset(dataset_name, model_name):
         runs = get_runs(ds['wandb_project'], ds['prefix'])
 
     if not runs:
+        want_720m = (scale is None or scale == '720m')
+        want_355m = (scale is None or scale == '355m')
+        want_124m = (scale is None or scale == '124m')
+
         # Prefer dedicated 720M fineweb/base runs when present.
-        if dataset_name == 'fineweb' and model_name == 'base':
+        if want_720m and dataset_name == 'fineweb' and model_name == 'base':
             local_exps_720m = os.path.join(LOCAL_BASE_DIR, 'exps_720m')
             runs = get_local_runs(local_exps_720m, 'fw_base_720m_', model_name=model_name)
             if runs:
                 model_size_label = '720M'
-                n_layer, n_embd, seq_len, batch_size = 32, 1280, 1024, 128
+                n_layer, n_embd, seq_len, batch_size = 12, 2048, 512, 1984  # eff. batch = 64 * acc_steps=31
 
         # Prefer dedicated 355M fineweb/base runs when present.
-        if not runs and dataset_name == 'fineweb' and model_name == 'base':
+        if want_355m and not runs and dataset_name == 'fineweb' and model_name == 'base':
             local_exps_355m = os.path.join(LOCAL_BASE_DIR, 'exps_355m')
             runs = get_local_runs(local_exps_355m, 'fw_base_355m_', model_name=model_name)
             if runs:
                 model_size_label = '355M'
-                n_layer, n_embd, seq_len, batch_size = 24, 1024, 1024, 128
+                n_layer, n_embd, seq_len, batch_size = 24, 1024, 1024, 512  # eff. batch = 64 * acc_steps=8
 
 
-        if not runs:
+        if want_124m and not runs:
             local_exps = os.path.join(LOCAL_BASE_DIR, 'exps')
             auto_prefix = get_local_prefix(dataset_name, model_name)
             runs = get_local_runs(local_exps, auto_prefix, model_name=model_name)
@@ -398,85 +401,59 @@ def plot_dataset(dataset_name, model_name):
         flops_str = f"{low/1e18:.3f}" if abs(high - low) < 1e-9 else f"{low/1e18:.3f}-{high/1e18:.3f}"
         print(f"  {label:<30s} {nes_str:>8s} {r['best_loss']:>10.4f} {math.exp(r['best_loss']):>8.1f} {wall_min:>10.1f}  {flops_str:>13s}e18")
 
-    fig, (ax1, ax3) = plt.subplots(1, 2, figsize=(20, 7))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    LEFT_LABELS = {'Muon (P=1)', 'LiMuon P=1'}
-
-    def smart_annotate(ax, label, x, y, nesterov=True, fontsize=10):
-        text = label if nesterov else f"{label}*"
-        if label in LEFT_LABELS:
-            ax.annotate(text, (x, y), textcoords="offset points",
-                        xytext=(-8, 5), fontsize=fontsize, ha='right')
-        else:
-            ax.annotate(text, (x, y), textcoords="offset points",
-                        xytext=(8, 5), fontsize=fontsize, ha='left')
+    has_nonesterov = any(not v.get('nesterov', True) for v in runs.values())
 
     for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, dynamic_order):
         color = s.get('color', '#333')
         alpha = 1.0 if nesterov_pass else 0.45
         lw = s.get('lw', 2) if nesterov_pass else s.get('lw', 2) * 0.8
         ls = s.get('ls', '-') if nesterov_pass else (0, (3, 2))
-        legend_label = f"{label} ({r['best_loss']:.3f})" if nesterov_pass else f"{label}* no-Nes ({r['best_loss']:.3f})"
+        suffix = '' if nesterov_pass else '* no-Nes'
+        legend_label = f"{label}{suffix} ({r['best_loss']:.3f})"
+
+        # Left panel: val loss vs iteration.
         ax1.plot(r['iters'], r['losses'], label=legend_label,
                  color=color, ls=ls, lw=lw, alpha=alpha)
 
-    ax1.set_yscale('log')
-    y_max = 4.0 if model_size_label == '355M' else 4.5
+        # Right panel: val loss vs cumulative FLOPs (same curve, different x-axis).
+        flops_curve = [compute_flops(n_layer, n_embd, seq_len, batch_size,
+                                     it, r['opt'], K=r['K'], ns_steps=r['ns_steps'],
+                                     opt_diag=r.get('opt_diag'))[0]
+                       for it in r['iters']]
+        ax2.plot(flops_curve, r['losses'], label=legend_label,
+                 color=color, ls=ls, lw=lw, alpha=alpha)
+
     y_min_data = min(min(r['losses']) for r in runs.values() if r.get('losses'))
+    y_max = {'355M': 4.0, '720M': 5.0}.get(model_size_label, 4.5)
     y_min = max(1e-6, y_min_data * 0.98)
+
+    title_suffix = f'{model_size_label}, {ds["title"]} ({model_title})'
+
+    ax1.set_yscale('log')
     ax1.set_ylim(y_min, y_max)
     ax1.set_xlabel('Iteration', fontsize=16)
     ax1.set_ylabel('Val Loss', fontsize=16)
-    ax1.set_title(f'Val Loss vs Iteration — {model_size_label}, {ds["title"]} ({model_title})', fontsize=16)
+    ax1.set_title(f'Val Loss vs Iteration — {title_suffix}', fontsize=16)
     ax1.legend(fontsize=12, loc='upper right')
     ax1.grid(True, alpha=0.3, which='both')
     ax1.tick_params(labelsize=13)
 
-    # Plot 2: FLOPs scatter (use legend instead of per-point text labels)
-    legend_handles = []
-    seen_legend = set()
-    for rkey, r, label, s, nesterov_pass in _iter_plot_runs(runs, dynamic_order):
-        color = s.get('color', '#333')
-        alpha = 0.9
-        marker = s.get('marker', 'o') if nesterov_pass else 'x'
-        flops_lo, flops_hi = compute_flops(n_layer, n_embd, seq_len, batch_size,
-                                           r.get('iterations', 64000),
-                                           r['opt'], K=r['K'], ns_steps=r['ns_steps'],
-                                           opt_diag=r.get('opt_diag'))
-        # Keep scatter simple: plot the midpoint for adaptive FLOPs ranges.
-        flops = 0.5 * (flops_lo + flops_hi)
-        ec = {} if marker == 'x' else {'edgecolors': 'black', 'linewidths': 0.5}
-        ax3.scatter(flops, r['best_loss'], s=180, zorder=5,
-                    color=color, marker=marker, alpha=alpha, **ec)
-        legend_text = f"{label}{'' if nesterov_pass else '*'}"
-        if legend_text not in seen_legend:
-            seen_legend.add(legend_text)
-            legend_handles.append(
-                Line2D([0], [0], marker=marker, linestyle='None',
-                       markerfacecolor=color, markeredgecolor='black' if marker != 'x' else color,
-                       markeredgewidth=0.5 if marker != 'x' else 1.0,
-                       alpha=alpha, markersize=9, label=legend_text)
-            )
+    ax2.set_yscale('log')
+    ax2.set_ylim(y_min, y_max)
+    ax2.set_xlabel('Total Training FLOPs', fontsize=16)
+    ax2.set_ylabel('Val Loss', fontsize=16)
+    ax2.set_title(f'Val Loss vs FLOPs — {title_suffix}', fontsize=16)
+    ax2.legend(fontsize=12, loc='upper right')
+    ax2.grid(True, alpha=0.3, which='both')
+    ax2.tick_params(labelsize=13)
+    ax2.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
 
-    ax3.set_xlabel('Total Training FLOPs', fontsize=16)
-    ax3.set_ylabel('Best Val Loss', fontsize=16)
-    ax3.set_title('Best Val Loss vs FLOPs', fontsize=16)
-    ax3.grid(True, alpha=0.3)
-    ax3.tick_params(labelsize=13)
-    ax3.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
-    if model_size_label in ('355M', '720M'):
-        ax3.legend(handles=legend_handles, loc='upper right',
-                   fontsize=12, title='Run (best loss)', title_fontsize=12, frameon=True)
-    else:
-        ax3.legend(handles=legend_handles, loc='center left', bbox_to_anchor=(1.02, 0.5),
-                   fontsize=12, title='Run (best loss)', title_fontsize=12, frameon=True)
-
-    # Legend note for non-nesterov
-    has_nonesterov = any(not v.get('nesterov', True) for v in runs.values())
     if has_nonesterov:
         fig.text(0.5, 0.01, '* = no Nesterov (faded)', ha='center', fontsize=11, style='italic')
 
-    plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 0.90, 1])
+    plt.tight_layout(rect=[0, 0.03 if has_nonesterov else 0, 1, 1])
     os.makedirs(RESULTS_DIR, exist_ok=True)
     if model_size_label == '355M':
         suffix = '_355m'
@@ -517,7 +494,14 @@ def discover_available_dataset_model_pairs():
 
 
 def main():
-    if len(sys.argv) == 1:
+    args = [a for a in sys.argv[1:]]
+    scale = None
+    for s in ('124m', '355m', '720m'):
+        if s in args:
+            scale = s
+            args.remove(s)
+
+    if not args:
         pairs = discover_available_dataset_model_pairs()
         if not pairs:
             print("No local results found in exps/ to plot.")
@@ -525,26 +509,26 @@ def main():
         print("Auto-discovered result groups:")
         for ds, model_name in pairs:
             print(f"  - {ds} {model_name}")
-            plot_dataset(ds, model_name)
+            plot_dataset(ds, model_name, scale=scale)
         return
 
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <dataset|all> <base|llama>")
+    if len(args) < 2:
+        print(f"Usage: {sys.argv[0]} <dataset|all> <base|llama> [124m|355m|720m]")
         print(f"   or: {sys.argv[0]}   # auto-plot all available local results")
         sys.exit(1)
 
-    target = sys.argv[1]
-    model_name = sys.argv[2].lower()
+    target = args[0]
+    model_name = args[1].lower()
     if model_name not in MODELS:
         print(f"Unknown model: {model_name}. Choose from: {', '.join(sorted(MODELS))}")
         sys.exit(1)
 
     if target == 'all':
         for ds in DATASETS:
-            plot_dataset(ds, model_name)
+            plot_dataset(ds, model_name, scale=scale)
     else:
         # Allow unknown datasets for local-only plotting via automatic prefix.
-        plot_dataset(target, model_name)
+        plot_dataset(target, model_name, scale=scale)
 
 
 if __name__ == '__main__':
