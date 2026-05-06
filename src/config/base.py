@@ -142,6 +142,9 @@ def parse_args(base_parser, args, namespace):
     parser.add_argument("--cheap_ns_steps", default=2, type=int)  # NS steps for cheap_ns mode
     parser.add_argument("--sign_scaling", default="muon", type=str, choices=["muon", "frob", "none"])  # sign update scaling
     parser.add_argument("--srank_alpha", default=0.0, type=float)  # adaptive stable-rank threshold: use Muon when srank(M) <= alpha * min(m,n). 0 = disabled (use fixed muon_every_k)
+    parser.add_argument("--norm_diag", action="store_true", help="Log per-iteration norm-ratio diagnostics (LionMuon only) into <exp_dir>/norm_diag.json.")
+    parser.add_argument("--norm_diag_path", default=None, type=str, help="Override the norm-diagnostics JSON output path.")
+    parser.add_argument("--norm_diag_every_k", default=50, type=int, help="Record norm diagnostics every K optimizer steps.")
     parser.add_argument("--adamuon_ns_steps", default=6, type=int)
     parser.add_argument("--adamuon_rms_factor", default=0.2, type=float)
     parser.add_argument(

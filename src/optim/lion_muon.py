@@ -19,6 +19,7 @@ import torch
 import torch.distributed as dist
 
 from .muon import zeropower_via_newtonschulz5
+from .norm_diagnostics import NormDiagnostics
 from .schedule import cos_inf_schedule, cosine_wsd_decay_schedule, wsd_schedule
 from .utils import estimate_stable_rank
 
@@ -56,6 +57,8 @@ class LionMuon(torch.optim.Optimizer):
         adamw_betas=(0.8, 0.999),
         adamw_eps=1e-8,
         adamw_wd=0.1,
+        norm_diag_path=None,
+        norm_diag_every_k=50,
     ):
         if lion_lr is None:
             lion_lr = lr * 0.01  # default: 1% of muon lr
@@ -91,6 +94,10 @@ class LionMuon(torch.optim.Optimizer):
             "srank_ratios": [],
             "update_types": [],
         }
+        self._norm_diag = (
+            NormDiagnostics(norm_diag_path, log_every_k=norm_diag_every_k)
+            if norm_diag_path else None
+        )
 
         if "WORLD_SIZE" in os.environ:
             self.world_size = int(os.environ["WORLD_SIZE"])
@@ -130,6 +137,14 @@ class LionMuon(torch.optim.Optimizer):
         if adaptive:
             self._diag["srank_ratios"] = []
             self._diag["update_types"] = []
+
+        # Collect diagnostics tensors only on log steps to avoid the cost of cloning every iteration.
+        norm_diag_active = (
+            self._norm_diag is not None
+            and self.world_size == 1
+            and (self._step_count % self._norm_diag.log_every_k == 0)
+        )
+        diag_payload = [] if norm_diag_active else None
 
         for group in self.param_groups:
 
@@ -189,6 +204,18 @@ class LionMuon(torch.optim.Optimizer):
 
                     updates_flat[curr_idx : curr_idx + p.numel()] = update.flatten()
 
+                    # Capture diagnostics BEFORE the in-place momentum update so
+                    # that m corresponds to M_{t-1} (pre-update buffer) when
+                    # computing the (G - M) residual. Clone p so the W_t
+                    # snapshot survives the parameter update later in this step.
+                    if norm_diag_active:
+                        diag_payload.append((
+                            p.detach().clone(),
+                            g.detach().clone(),
+                            m.detach().clone(),
+                            update.detach().clone(),
+                        ))
+
                     # Update momentum with beta2 (Lion rule, after computing direction)
                     m.mul_(beta2).add_(g, alpha=1 - beta2)
 
@@ -243,6 +270,20 @@ class LionMuon(torch.optim.Optimizer):
                 scale = bias_correction1 / bias_correction2 ** 0.5
                 p.data.mul_(1 - adamw_lr * wd)
                 p.data.add_(g, alpha=-adamw_lr / scale)
+
+        # Norm-ratio diagnostics: record once per log-step using the W_t snapshot
+        # captured during the LionMuon loop above (before this method's loops
+        # applied the update to p.data, so the stored params are still W_t).
+        if norm_diag_active and diag_payload:
+            ps, gs, ms, us = zip(*diag_payload)
+            self._norm_diag.record(
+                step=self._step_count,
+                params=list(ps),
+                grads=list(gs),
+                momenta=list(ms),
+                updates=list(us),
+            )
+            self._norm_diag.maybe_flush()
 
 
 

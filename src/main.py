@@ -185,6 +185,11 @@ def main(args, parser):
             else list(model.module.parameters())
         )
         assert sum(p.numel() for p in param_list) == params_cnt
+        nd_path = getattr(args, "norm_diag_path", None) or None
+        if nd_path == "":
+            nd_path = None
+        if nd_path is None and getattr(args, "norm_diag", False):
+            nd_path = str(exp_dir / "norm_diag.json")
         opt = LionMuon(
             muon_params=param_list,
             lr=args.muon_lr_factor,
@@ -200,6 +205,8 @@ def main(args, parser):
             adamw_betas=(0.8, 0.999),
             adamw_eps=1e-8,
             adamw_wd=args.weight_decay,
+            norm_diag_path=nd_path,
+            norm_diag_every_k=getattr(args, "norm_diag_every_k", 50),
         )
     elif args.opt == "sign_muon":
         param_list = (

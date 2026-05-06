@@ -83,6 +83,8 @@ def _load_runs(scale, dataset, arch):
         runs = get_local_runs(exps_dir, get_legacy_local_prefix(dataset), model_name=arch)
     runs = {k: v for k, v in runs.items()
             if not _is_excluded_run_key(k) and _base_key(k) in ALLOWED_BASE_KEYS}
+    if scale == '720m':
+        runs = {k: v for k, v in runs.items() if 'adamw' not in k.lower()}
     return _normalize_run_keys(runs)
 
 

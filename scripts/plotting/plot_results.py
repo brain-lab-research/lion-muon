@@ -380,6 +380,9 @@ def plot_dataset(dataset_name, model_name, scale=None):
         k: v for k, v in runs.items()
         if not _is_excluded_run_key(k) and _base_key(k) in ALLOWED_BASE_KEYS
     }
+    # Drop AdamW from 720M (per main-text decision).
+    if model_size_label == '720M':
+        runs = {k: v for k, v in runs.items() if 'adamw' not in k.lower()}
     runs = _normalize_run_keys(runs)
 
     dynamic_order = ORDER
