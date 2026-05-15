@@ -65,9 +65,12 @@ run() {
     --experiment_name "$exp_name" "$@"
 }
 
+LRS="1e-4 3e-4 1e-3 3e-3 1e-2 3e-2"
+SIGN_LRS="1e-5 3e-5 1e-4 3e-4"
+
 # # SignMuon-Fixed K=1 (muon_fixed) - LR sweep
 echo "=== SignMuon Fixed K=1 (muon_fixed) ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
+for lr in $LRS; do
   run "signmuon_fixed_k1_lr${lr}" \
     --opt lion_muon --lr $lr --muon_lr_factor $lr \
     --muon_every_k 1 --beta1 0.9 --beta2 0.9
@@ -75,8 +78,8 @@ done
 
 # # SignMuon-Fixed K=2 - LR and sign_lr sweep
 echo "=== SignMuon Fixed K=2 ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
-  for sign_lr in 1e-5 3e-5 1e-4; do
+for lr in $LRS; do
+  for sign_lr in $SIGN_LRS; do
     run "signmuon_fixed_k2_lr${lr}_slr${sign_lr}" \
       --opt lion_muon --lr $lr --muon_lr_factor $lr \
       --sign_lr $sign_lr --muon_every_k 2 --beta1 0.9 --beta2 0.9
@@ -85,8 +88,8 @@ done
 
 # # SignMuon-Fixed K=5 - LR and sign_lr sweep
 echo "=== SignMuon Fixed K=5 ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
-  for sign_lr in 1e-5 3e-5 1e-4; do
+for lr in $LRS; do
+  for sign_lr in $SIGN_LRS; do
     run "signmuon_fixed_k5_lr${lr}_slr${sign_lr}" \
       --opt lion_muon --lr $lr --muon_lr_factor $lr \
       --sign_lr $sign_lr --muon_every_k 5 --beta1 0.9 --beta2 0.9
@@ -95,8 +98,8 @@ done
 
 # SignMuon-Fixed K=infty (signum_fixed) - LR and sign_lr sweep
 echo "=== SignMuon Fixed K=infty (signum_fixed) ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
-  for sign_lr in 1e-5 3e-5 1e-4; do
+for lr in $LRS; do
+  for sign_lr in $SIGN_LRS; do
     run "signum_fixed_lr${lr}_slr${sign_lr}" \
       --opt lion_muon --lr $lr --muon_lr_factor $lr \
       --sign_lr $sign_lr --muon_every_k 10000000 --beta1 0.9 --beta2 0.9
@@ -105,7 +108,7 @@ done
 
 # LionMuon K=1 - LR sweep
 echo "=== LionMuon K=1 ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
+for lr in $LRS; do
   run "lionmuon_k1_lr${lr}" \
     --opt lion_muon --lr $lr --muon_lr_factor $lr \
     --muon_every_k 1 --beta1 0.9 --beta2 0.99
@@ -113,8 +116,8 @@ done
 
 # LionMuon K=2 - LR and sign_lr sweep
 echo "=== LionMuon K=2 ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
-  for sign_lr in 1e-5 3e-5 1e-4; do
+for lr in $LRS; do
+  for sign_lr in $SIGN_LRS; do
     run "lionmuon_k2_lr${lr}_slr${sign_lr}" \
       --opt lion_muon --lr $lr --muon_lr_factor $lr \
       --sign_lr $sign_lr --muon_every_k 2 --beta1 0.9 --beta2 0.99
@@ -123,8 +126,8 @@ done
 
 # LionMuon K=5 - LR and sign_lr sweep
 echo "=== LionMuon K=5 ==="
-for lr in 1e-4 3e-4 1e-3 3e-3; do
-  for sign_lr in 1e-5 3e-5 1e-4; do
+for lr in $LRS; do
+  for sign_lr in $SIGN_LRS; do
     run "lionmuon_k5_lr${lr}_slr${sign_lr}" \
       --opt lion_muon --lr $lr --muon_lr_factor $lr \
       --sign_lr $sign_lr --muon_every_k 5 --beta1 0.9 --beta2 0.99

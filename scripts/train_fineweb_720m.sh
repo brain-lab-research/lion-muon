@@ -67,17 +67,16 @@ run() {
 }
 
 # --- Algorithms ---
-# muP-scaled from 124M baseline (n_embd: 768→2048, scale factor 0.375)
 
 run "adamw" \
   --opt adamw --lr 0.001 --beta1 0.9 --beta2 0.999
 
 run "muon_fixed" \
-  --opt lion_muon --lr 3.75e-4 --muon_lr_factor 3.75e-4 \
+  --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
   --muon_every_k 1 --beta1 0.9 --beta2 0.9
 
 run "signum_fixed" \
-  --opt lion_muon --lr 3.75e-4 --muon_lr_factor 3.75e-4 --sign_lr 3.75e-5 \
+  --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 --sign_lr 3e-5 \
   --muon_every_k 10000000 --beta1 0.9 --beta2 0.9
 
 run "lion" \
@@ -85,23 +84,23 @@ run "lion" \
   --sign_lr 1.875e-5 --muon_every_k 10000000 --beta1 0.9 --beta2 0.99
 
 # run "lionmuon_k1" \
-#   --opt lion_muon --lr 3.75e-4 --muon_lr_factor 2.625e-4 \
+#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
 #   --muon_every_k 1 --beta1 0.9 --beta2 0.99
 
 # run "lionmuon_k2" \
-#   --opt lion_muon --lr 3.75e-4 --muon_lr_factor 3.75e-4 \
-#   --sign_lr 1.875e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.99
+#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+#   --sign_lr 1e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.99
 
 # run "lionmuon_k5" \
-#   --opt lion_muon --lr 3.75e-4 --muon_lr_factor 7.5e-4 \
-#   --sign_lr 1.875e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.99
+#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+#   --sign_lr 3e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.99
 
 # run "signmuon_fixed_k2" \
-#   --opt lion_muon --lr 3.75e-4 --muon_lr_factor 7.5e-4 \
-#   --sign_lr 1.875e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.9
+#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+#   --sign_lr 3e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.9
 
 # run "signmuon_fixed_k5" \
-#   --opt lion_muon --lr 3.75e-4 --muon_lr_factor 1.125e-3 \
-#   --sign_lr 1.875e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.9
+#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+#   --sign_lr 3e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.9
 
 echo "Script finished!"
