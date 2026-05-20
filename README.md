@@ -1,34 +1,24 @@
 # LionMuon
 
-Code accompanying the paper [LionMuon: Alternating Spectral and Sign Descent for Efficient Training (arXiv placeholder)](https://arxiv.org/abs/PLACEHOLDER).
+Code accompanying the paper [LionMuon: Alternating Spectral and Sign Descent for Efficient Training](https://arxiv.org/abs/2605.19811).
 
-This repository is a fork of [Andrei Semenov's `llm-baselines`](https://github.com/Niccolo-Ajroldi/llm-baselines), extended with **LionMuon** and **SignMuon** optimizers and the experiments reported in the paper.
+This repository is a fork of [Andrei Semenov's `llm-baselines`](https://github.com/Niccolo-Ajroldi/llm-baselines), extended with the `LionMuon` and `SignMuon` optimizers and the experiments reported in the paper.
 
 ## Algorithm
 
-For a single 2D parameter $W \in \mathbb{R}^{m \times n}$, **LionMuon** uses one momentum buffer $M_t$, forms a Lion-style interpolated direction $\hat{G}_t$, and every $P$-th step replaces $\mathrm{sign}(\hat{G}_t)$ with a Newton-Schulz orthogonalization $\mathrm{NS}_{K_{\mathrm{NS}}}(\hat{G}_t)$:
+![LionMuon algorithm](imgs/algo.png)
 
-**Inputs:** horizon $T$, period $P \in \{1, 2, \dots\} \cup \{\infty\}$, learning rates $\eta_M$ (Muon) and $\eta_L$ (Lion), betas $\beta_1, \beta_2 \in [0, 1)$, weight decay $\lambda \ge 0$, NS steps $K_{\mathrm{NS}}$, initial $W_0$ and $M_{-1} = 0$.
-
-**For** $t = 0, 1, \dots, T - 1$:
-
-1. $G_t = \nabla_W \mathcal{L}_t$ &nbsp; (stochastic gradient)
-2. $\hat{G}_t = \beta_1 M_{t-1} + (1 - \beta_1)\, G_t$ &nbsp; (Lion interpolation)
-3. **If** $t \bmod P = 0$: &nbsp; $W_{t+1} = W_t - \eta_M \bigl(\mathrm{NS}_{K_{\mathrm{NS}}}(\hat{G}_t) + \lambda W_t\bigr)$ &nbsp; (Muon step)
-4. **Else**: &nbsp; $W_{t+1} = W_t - \eta_L \bigl(\mathrm{sign}(\hat{G}_t) + \lambda W_t\bigr)$ &nbsp; (Lion step)
-5. $M_t = \beta_2 M_{t-1} + (1 - \beta_2)\, G_t$ &nbsp; (momentum update, every step)
-
-**SignMuon** is the special case $\beta_1 = \beta_2$: the dual-EMA collapses to a single Signum-style buffer, but the alternation between Newton-Schulz and elementwise sign is preserved. Pure **Signum**, **Lion**, and **Muon** are recovered as further special cases of the same algorithm:
+`SignMuon` is the special case `beta1 = beta2`: the dual-EMA collapses to a single Signum-style buffer, but the alternation between Newton-Schulz and elementwise sign is preserved. Pure `Signum`, `Lion`, and `Muon` are recovered as further special cases of the same algorithm:
 
 | Optimizer | Momentum | Period |
 | --- | --- | --- |
-| `Signum` (Bernstein et al., 2018) | $\beta_1 = \beta_2$ | $P = \infty$ |
-| `Lion` (Chen et al., 2024) | $\beta_1 \ne \beta_2$ (dual-EMA) | $P = \infty$ |
-| `Muon` (Jordan et al., 2024) | $\beta_1 = \beta_2$ | $P = 1$ |
-| `SignMuon` **(this work)** | $\beta_1 = \beta_2$ | any $P$ |
-| `LionMuon` **(this work)** | $\beta_1 \ne \beta_2$ (dual-EMA) | any $P$ |
+| `Signum` (Bernstein et al., 2018) | `beta1 = beta2` | `P = inf` |
+| `Lion` (Chen et al., 2024) | `beta1 != beta2` (dual-EMA) | `P = inf` |
+| `Muon` (Jordan et al., 2024) | `beta1 = beta2` | `P = 1` |
+| `SignMuon` **(this work)** | `beta1 = beta2` | any `P` |
+| `LionMuon` **(this work)** | `beta1 != beta2` (dual-EMA) | any `P` |
 
-1D parameters (biases, LayerNorm/RMSNorm gains) fall back to AdamW with a small fixed learning rate, following the standard Muon-hybrid convention. The optimizer state therefore matches Lion / Muon and is exactly half of AdamW.
+1D parameters (biases, LayerNorm/RMSNorm gains) fall back to AdamW with a small fixed learning rate, following the standard Muon-hybrid convention. The optimizer state therefore matches `Lion` / `Muon` and is exactly half of `AdamW`.
 
 Reference implementations live in [src/optim/lion_muon.py](src/optim/lion_muon.py) and [src/optim/sign_muon.py](src/optim/sign_muon.py); Newton-Schulz orthogonalization is in [src/optim/muon.py](src/optim/muon.py).
 
@@ -79,13 +69,13 @@ torchrun --nproc_per_node=4 ./src/main.py --config_format base --distributed_bac
 | Flag | Meaning |
 | --- | --- |
 | `--opt {lion_muon, sign_muon}` | Select the alternating optimizer |
-| `--lr` | AdamW backup LR $\eta_{\mathrm{AdamW}}$ for 1D parameters |
-| `--muon_lr_factor` | Muon learning rate $\eta_M$ for 2D parameters |
-| `--sign_lr` | Lion / sign learning rate $\eta_L$ for 2D parameters |
-| `--muon_every_k K` | Period $P$ (`K=1`: pure Muon; `K=∞`: pure Lion/Signum) |
-| `--beta1`, `--beta2` | $\beta_1, \beta_2$ (set equal $\Rightarrow$ SignMuon) |
-| `--muon_ns_steps` | Newton-Schulz iterations $K_{\mathrm{NS}}$ |
-| `--weight_decay` | Decoupled weight decay $\lambda$ |
+| `--lr` | AdamW backup LR for 1D parameters |
+| `--muon_lr_factor` | Muon learning rate for 2D parameters |
+| `--sign_lr` | Lion / sign learning rate for 2D parameters |
+| `--muon_every_k K` | Period `P` (`K=1`: pure Muon; `K=inf`: pure Lion/Signum) |
+| `--beta1`, `--beta2` | Set equal => SignMuon, unequal => LionMuon |
+| `--muon_ns_steps` | Newton-Schulz iterations |
+| `--weight_decay` | Decoupled weight decay |
 | `--srank_alpha` | Adaptive Muon trigger via stable-rank ratio (overrides `--muon_every_k`) |
 
 ## Directory layout
