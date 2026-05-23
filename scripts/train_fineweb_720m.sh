@@ -21,8 +21,8 @@ DEVICE="cuda:${GPU_ID}"
 
 BATCH_SIZE=64
 ACC_STEPS=31
-ITERATIONS=3500 
-WARMUP=2000
+ITERATIONS=14000
+WARMUP=100
 EVAL_INTERVAL=250
 
 N_LAYER=12
@@ -83,24 +83,24 @@ run "lion" \
   --opt lion_muon --lr 3.75e-4 --muon_lr_factor 2.625e-3 \
   --sign_lr 1.875e-5 --muon_every_k 10000000 --beta1 0.9 --beta2 0.99
 
-# run "lionmuon_k1" \
-#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
-#   --muon_every_k 1 --beta1 0.9 --beta2 0.99
+run "lionmuon_k1" \
+  --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+  --muon_every_k 1 --beta1 0.9 --beta2 0.99
 
-# run "lionmuon_k2" \
-#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
-#   --sign_lr 1e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.99
+run "lionmuon_k2" \
+  --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+  --sign_lr 1e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.99
 
-# run "lionmuon_k5" \
-#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
-#   --sign_lr 3e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.99
+run "lionmuon_k5" \
+  --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+  --sign_lr 3e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.99
 
-# run "signmuon_fixed_k2" \
-#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
-#   --sign_lr 3e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.9
+run "signmuon_fixed_k2" \
+  --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
+  --sign_lr 3e-5 --muon_every_k 2 --beta1 0.9 --beta2 0.9
 
-# run "signmuon_fixed_k5" \
-#   --opt lion_muon --lr 3e-3 --muon_lr_factor 3e-3 \
-#   --sign_lr 3e-5 --muon_every_k 5 --beta1 0.9 --beta2 0.9
+run "signmuon_fixed_k5" \
+  --opt lion_muon --lr 1e-2 --muon_lr_factor 1e-2 \
+  --sign_lr 1e-4 --muon_every_k 5 --beta1 0.9 --beta2 0.9
 
 echo "Script finished!"
